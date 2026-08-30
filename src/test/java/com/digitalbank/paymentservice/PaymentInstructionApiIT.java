@@ -2,24 +2,50 @@ package com.digitalbank.paymentservice;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.digitalbank.paymentservice.application.port.in.CreatePaymentInstructionCommand;
+import com.digitalbank.paymentservice.application.port.out.PaymentInstructionRepository;
+import com.digitalbank.paymentservice.application.service.PaymentInstructionService;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.math.BigDecimal;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Clock;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Import;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
+@Testcontainers
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@Import(TestSecurityConfig.class)
 class PaymentInstructionApiIT {
+
+    @Container
+    @ServiceConnection
+    static final PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:16-alpine");
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
     @LocalServerPort
     private int port;
+
+    @Autowired
+    private PaymentInstructionService paymentInstructionService;
+
+    @Autowired
+    private PaymentInstructionRepository paymentInstructionRepository;
 
     @Test
     void createsPaymentInstructionAndReplaysEquivalentRequest() throws Exception {
@@ -175,6 +201,93 @@ class PaymentInstructionApiIT {
     }
 
     @Test
+    void concurrentEquivalentRequestsConvergeToOneDurableInstruction() throws Exception {
+        var idempotencyKey = "payment-http-concurrent-" + UUID.randomUUID();
+        var requestBody = """
+                {
+                  "idempotencyKey": "%s",
+                  "correlationId": "correlation-concurrent",
+                  "amount": 25.00,
+                  "currency": "USD",
+                  "description": "Concurrent payment"
+                }
+                """.formatted(idempotencyKey);
+        ExecutorService executor = Executors.newFixedThreadPool(8);
+
+        try {
+            List<HttpResponse<String>> responses = executor
+                    .invokeAll(java.util.stream.IntStream.range(0, 20)
+                            .mapToObj(index -> (java.util.concurrent.Callable<HttpResponse<String>>)
+                                    () -> sendJson("POST", "/internal/v1/payment-instructions", requestBody))
+                            .toList())
+                    .stream()
+                    .map(this::get)
+                    .toList();
+
+            assertThat(responses)
+                    .filteredOn(response -> response.statusCode() == 201)
+                    .hasSize(1);
+            assertThat(responses)
+                    .filteredOn(response -> response.statusCode() == 200)
+                    .hasSize(19);
+            assertThat(responses.stream()
+                            .map(response ->
+                                    read(response.body()).path("instructionId").asText()))
+                    .containsOnly(responses.stream()
+                            .map(response ->
+                                    read(response.body()).path("instructionId").asText())
+                            .findFirst()
+                            .orElseThrow());
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void equivalentRetryFromFreshServiceInstanceReadsTheDurableInstruction() {
+        var key = "payment-fresh-service-" + UUID.randomUUID();
+        var command = new CreatePaymentInstructionCommand(
+                key, "correlation-first", new BigDecimal("25.00"), "USD", "Durable payment");
+
+        var first = paymentInstructionService.register(command);
+        var freshService = new PaymentInstructionService(paymentInstructionRepository, Clock.systemUTC());
+        var replay = freshService.register(new CreatePaymentInstructionCommand(
+                key, "correlation-retry", new BigDecimal("25.0"), "usd", "Durable payment"));
+
+        assertThat(replay.idempotentReplay()).isTrue();
+        assertThat(replay.instructionId()).isEqualTo(first.instructionId());
+        assertThat(replay.correlationId()).isEqualTo("correlation-first");
+    }
+
+    @Test
+    void internalPaymentInstructionsRequireAuthenticationAndScope() throws Exception {
+        var requestBody = """
+                {
+                  "idempotencyKey": "payment-http-auth-%s",
+                  "correlationId": "correlation-auth",
+                  "amount": 25.00,
+                  "currency": "USD"
+                }
+                """.formatted(UUID.randomUUID());
+
+        var unauthenticated = sendJsonWithoutAuthorization("POST", "/internal/v1/payment-instructions", requestBody);
+        assertAuthenticationProblem(unauthenticated, "/internal/v1/payment-instructions");
+
+        var insufficient = sendJsonWithAuthorization(
+                "POST",
+                "/internal/v1/payment-instructions",
+                requestBody,
+                TestSecurityConfig.INSUFFICIENT_SCOPE_BEARER_TOKEN);
+        assertThat(insufficient.statusCode()).isEqualTo(403);
+        assertContentType(insufficient, "application/problem+json");
+        var problem = read(insufficient.body());
+        assertThat(problem.path("type").asText()).isEqualTo("urn:digital-bank:payment:access-denied");
+        assertThat(problem.path("title").asText()).isEqualTo("Payment access denied");
+        assertThat(problem.path("instance").asText()).isEqualTo("/internal/v1/payment-instructions");
+        assertThat(problem.path("detail").asText()).doesNotContain("scope");
+    }
+
+    @Test
     void malformedInstructionIdAndFailureContractStayWithinBoundaryRules() throws Exception {
         var malformedId = send("POST", "/internal/v1/payment-instructions/not-a-uuid/completion");
 
@@ -231,6 +344,28 @@ class PaymentInstructionApiIT {
                         .has("409"))
                 .isTrue();
         assertThat(document.path("paths")
+                        .path("/internal/v1/payment-instructions")
+                        .path("post")
+                        .path("responses")
+                        .path("401")
+                        .path("content")
+                        .has("application/problem+json"))
+                .isTrue();
+        assertThat(document.path("paths")
+                        .path("/internal/v1/payment-instructions")
+                        .path("post")
+                        .path("responses")
+                        .path("403")
+                        .path("content")
+                        .has("application/problem+json"))
+                .isTrue();
+        assertThat(document.path("components")
+                        .path("securitySchemes")
+                        .path("bearer-jwt")
+                        .path("scheme")
+                        .asText())
+                .isEqualTo("bearer");
+        assertThat(document.path("paths")
                         .path("/internal/v1/payment-instructions/{instructionId}/failure")
                         .path("post")
                         .path("responses")
@@ -265,6 +400,7 @@ class PaymentInstructionApiIT {
                 HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
                         .method(method, HttpRequest.BodyPublishers.noBody())
                         .header("Accept", "application/json")
+                        .header("Authorization", "Bearer " + TestSecurityConfig.TEST_BEARER_TOKEN)
                         .build(),
                 HttpResponse.BodyHandlers.ofString());
     }
@@ -275,8 +411,51 @@ class PaymentInstructionApiIT {
                         .method(method, HttpRequest.BodyPublishers.ofString(body))
                         .header("Accept", "application/json")
                         .header("Content-Type", "application/json")
+                        .header("Authorization", "Bearer " + TestSecurityConfig.TEST_BEARER_TOKEN)
                         .build(),
                 HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> sendJsonWithoutAuthorization(String method, String path, String body)
+            throws Exception {
+        return httpClient.send(
+                HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
+                        .method(method, HttpRequest.BodyPublishers.ofString(body))
+                        .header("Accept", "application/json")
+                        .header("Content-Type", "application/json")
+                        .build(),
+                HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> sendJsonWithAuthorization(String method, String path, String body, String token)
+            throws Exception {
+        return httpClient.send(
+                HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
+                        .method(method, HttpRequest.BodyPublishers.ofString(body))
+                        .header("Accept", "application/json")
+                        .header("Content-Type", "application/json")
+                        .header("Authorization", "Bearer " + token)
+                        .build(),
+                HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> get(java.util.concurrent.Future<HttpResponse<String>> future) {
+        try {
+            return future.get();
+        } catch (Exception exception) {
+            throw new AssertionError(exception);
+        }
+    }
+
+    private void assertAuthenticationProblem(HttpResponse<String> response, String expectedInstance) throws Exception {
+        assertThat(response.statusCode()).isEqualTo(401);
+        assertThat(response.headers().firstValue("www-authenticate")).hasValue("Bearer");
+        assertContentType(response, "application/problem+json");
+        var problem = read(response.body());
+        assertThat(problem.path("type").asText()).isEqualTo("urn:digital-bank:payment:authentication-required");
+        assertThat(problem.path("title").asText()).isEqualTo("Payment authentication required");
+        assertThat(problem.path("instance").asText()).isEqualTo(expectedInstance);
+        assertThat(problem.path("detail").asText()).doesNotContain("issuer").doesNotContain("token");
     }
 
     private com.fasterxml.jackson.databind.JsonNode read(String body) {

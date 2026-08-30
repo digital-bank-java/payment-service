@@ -8,9 +8,7 @@ import com.digitalbank.paymentservice.domain.model.PaymentInstructionId;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.UnaryOperator;
-import org.springframework.stereotype.Repository;
 
-@Repository
 public class InMemoryPaymentInstructionRepository implements PaymentInstructionRepository {
 
     private final ConcurrentHashMap<PaymentInstructionId, PaymentInstruction> instructions = new ConcurrentHashMap<>();
