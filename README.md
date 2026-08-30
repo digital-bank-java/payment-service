@@ -1,6 +1,6 @@
 # Payment Service
 
-Payment Service is the Digital Bank Java platform foundation for future payment rail workflows. This repository currently contains a deployable Spring Boot baseline plus an internal payment instruction lifecycle API; payment rail business logic, Kafka behavior, and public gateway routes remain intentionally out of scope.
+Payment Service is the Digital Bank Java platform foundation for future payment rail workflows. This repository currently contains a deployable Spring Boot baseline plus an internal, in-memory payment instruction lifecycle API for application-boundary validation; payment rail business logic, Kafka behavior, durable persistence, and public gateway routes remain intentionally out of scope.
 
 ## Implemented State
 
@@ -24,7 +24,7 @@ The current application foundation exposes an internal HTTP adapter over the tra
 
 The application boundary also normalizes the idempotency key, amount, currency, and description before comparing retries. An equivalent retry returns the original instruction identity, while reuse of the same idempotency key with a different business request is rejected. Correlation IDs are retained for tracing and are deliberately excluded from the idempotency comparison, so a retried request may have a new trace context.
 
-The current output adapter is an in-memory repository used to exercise these semantics. Durable persistence, payment-provider adapters, Kafka publication, and transaction saga orchestration are intentionally deferred to their planned stories.
+The current output adapter is an in-memory repository used only to exercise these semantics inside the service boundary. It is not durable and should not be read as production payment persistence. Durable persistence, payment-provider adapters, Kafka publication, and transaction saga orchestration are intentionally deferred to their planned stories.
 
 ### Endpoints
 
@@ -145,7 +145,7 @@ curl --fail -X POST http://localhost:18085/internal/v1/payment-instructions \
   -d '{"idempotencyKey":"payment-001","correlationId":"trace-001","amount":25.00,"currency":"USD","description":"Utility bill payment"}'
 ```
 
-Normal platform access should later flow through the API Gateway. Payment-provider integrations, durable persistence, and external routing are still out of scope for this repository.
+Normal platform access should later flow through the API Gateway. The current HTTP surface is internal-only and backed by in-memory state; payment-provider integrations, durable persistence, and external routing are still out of scope for this repository.
 
 ## CI
 

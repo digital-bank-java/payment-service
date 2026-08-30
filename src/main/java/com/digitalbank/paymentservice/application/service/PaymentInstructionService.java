@@ -7,7 +7,6 @@ import com.digitalbank.paymentservice.application.port.in.FailPaymentInstruction
 import com.digitalbank.paymentservice.application.port.in.PaymentInstructionResult;
 import com.digitalbank.paymentservice.application.port.out.PaymentInstructionRepository;
 import com.digitalbank.paymentservice.domain.exception.PaymentInstructionIdempotencyConflictException;
-import com.digitalbank.paymentservice.domain.exception.PaymentInstructionNotFoundException;
 import com.digitalbank.paymentservice.domain.model.PaymentInstruction;
 import com.digitalbank.paymentservice.domain.model.PaymentInstructionId;
 import java.time.Clock;
@@ -48,19 +47,13 @@ public class PaymentInstructionService
 
     @Override
     public PaymentInstructionResult complete(PaymentInstructionId instructionId) {
-        var instruction = find(instructionId);
-        return PaymentInstructionResult.from(repository.save(instruction.complete(clock.instant())), false);
+        return PaymentInstructionResult.from(
+                repository.transition(instructionId, instruction -> instruction.complete(clock.instant())), false);
     }
 
     @Override
     public PaymentInstructionResult fail(PaymentInstructionId instructionId, String reason) {
-        var instruction = find(instructionId);
-        return PaymentInstructionResult.from(repository.save(instruction.fail(reason, clock.instant())), false);
-    }
-
-    private PaymentInstruction find(PaymentInstructionId instructionId) {
-        return repository
-                .findById(instructionId)
-                .orElseThrow(() -> new PaymentInstructionNotFoundException(instructionId));
+        return PaymentInstructionResult.from(
+                repository.transition(instructionId, instruction -> instruction.fail(reason, clock.instant())), false);
     }
 }

@@ -123,6 +123,37 @@ class PaymentInstructionApiIT {
     }
 
     @Test
+    void changedPayloadWithSameIdempotencyKeyReturnsDocumentedConflict() throws Exception {
+        var idempotencyKey = "payment-http-idempotency-conflict-" + UUID.randomUUID();
+        var original = sendJson("POST", "/internal/v1/payment-instructions", """
+                {
+                  "idempotencyKey": "%s",
+                  "correlationId": "correlation-original",
+                  "amount": 25.00,
+                  "currency": "USD",
+                  "description": "Original payment"
+                }
+                """.formatted(idempotencyKey));
+        var changed = sendJson("POST", "/internal/v1/payment-instructions", """
+                {
+                  "idempotencyKey": "%s",
+                  "correlationId": "correlation-retry",
+                  "amount": 30.00,
+                  "currency": "USD",
+                  "description": "Changed payment"
+                }
+                """.formatted(idempotencyKey));
+
+        assertThat(original.statusCode()).isEqualTo(201);
+        assertThat(changed.statusCode()).isEqualTo(409);
+        assertContentType(changed, "application/problem+json");
+        var problem = read(changed.body());
+        assertThat(problem.path("type").asText())
+                .isEqualTo("https://digital-bank-java.local/problems/payment-instruction-idempotency-conflict");
+        assertThat(problem.path("idempotencyKey").asText()).isEqualTo(idempotencyKey);
+    }
+
+    @Test
     void malformedInstructionIdAndFailureContractStayWithinBoundaryRules() throws Exception {
         var malformedId = send("POST", "/internal/v1/payment-instructions/not-a-uuid/completion");
 
