@@ -35,6 +35,8 @@ spec:
               value: {{ .Values.runtime.configServerUrl | quote }}
             - name: SPRING_PROFILES_ACTIVE
               value: {{ .Values.runtime.profile | quote }}
+            - name: SERVER_PORT
+              value: {{ .Values.service.port | quote }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           ports:
