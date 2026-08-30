@@ -143,6 +143,9 @@ class PaymentInstructionServiceTest {
             Future<Object> failure = executor.submit(
                     compete(barrier, () -> racingService.fail(created.instructionId(), "provider rejected payment")));
 
+            assertThat(repository.awaitConcurrentTransitions()).isTrue();
+            repository.releaseTransitions();
+
             List<Object> results = List.of(completion.get(), failure.get());
 
             assertThat(results)
@@ -195,10 +198,25 @@ class PaymentInstructionServiceTest {
 
         private volatile PaymentInstructionId coordinatedInstructionId;
         private volatile CountDownLatch concurrentTransitions;
+        private volatile CountDownLatch releaseTransitions;
 
         void coordinate(PaymentInstructionId instructionId) {
             coordinatedInstructionId = instructionId;
             concurrentTransitions = new CountDownLatch(2);
+            releaseTransitions = new CountDownLatch(1);
+        }
+
+        boolean awaitConcurrentTransitions() {
+            try {
+                return concurrentTransitions.await(1, TimeUnit.SECONDS);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(exception);
+            }
+        }
+
+        void releaseTransitions() {
+            releaseTransitions.countDown();
         }
 
         @Override
@@ -211,13 +229,19 @@ class PaymentInstructionServiceTest {
         }
 
         private void awaitConcurrentTransition(PaymentInstructionId instructionId) {
-            var latch = concurrentTransitions;
-            if (latch == null || !instructionId.equals(coordinatedInstructionId) || latch.getCount() <= 0) {
+            var entered = concurrentTransitions;
+            var release = releaseTransitions;
+            if (entered == null
+                    || release == null
+                    || !instructionId.equals(coordinatedInstructionId)
+                    || entered.getCount() <= 0) {
                 return;
             }
-            latch.countDown();
+            entered.countDown();
             try {
-                latch.await(200, TimeUnit.MILLISECONDS);
+                if (!release.await(1, TimeUnit.SECONDS)) {
+                    throw new AssertionError("Timed out waiting to release coordinated transitions");
+                }
             } catch (InterruptedException exception) {
                 Thread.currentThread().interrupt();
                 throw new AssertionError(exception);
