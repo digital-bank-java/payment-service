@@ -17,6 +17,14 @@ This service will later own payment workflow coordination and payment rail integ
 
 Payment rail integrations must remain behind outbound ports and adapters when that work is approved and tracked. Do not add provider credentials or payment data to this repository.
 
+## Payment Instruction Lifecycle Foundation
+
+The current application foundation defines a transport-neutral payment instruction boundary without exposing a public payment route. A payment instruction is accepted as `PENDING` and can move once to either `COMPLETED` or `FAILED`; repeating the same terminal outcome is idempotent, while changing a terminal outcome is rejected.
+
+The application boundary also normalizes the idempotency key, amount, currency, and description before comparing retries. An equivalent retry returns the original instruction identity, while reuse of the same idempotency key with a different business request is rejected. Correlation IDs are retained for tracing and are deliberately excluded from the idempotency comparison, so a retried request may have a new trace context.
+
+The current output adapter is an in-memory repository used to exercise these semantics. Durable persistence, payment-provider adapters, Kafka publication, and transaction saga orchestration are intentionally deferred to their planned stories.
+
 ## Runtime Configuration
 
 Config Server supplies the effective runtime configuration. The service repository contains only the Config Client bootstrap:

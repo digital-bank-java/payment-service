@@ -1,0 +1,10 @@
+package com.digitalbank.paymentservice.domain.exception;
+
+import com.digitalbank.paymentservice.domain.model.PaymentInstructionId;
+
+public class PaymentInstructionNotFoundException extends RuntimeException {
+
+    public PaymentInstructionNotFoundException(PaymentInstructionId id) {
+        super("Payment instruction was not found: " + id.value());
+    }
+}
