@@ -8,6 +8,7 @@ import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -62,6 +63,14 @@ class ApiExceptionHandler {
                                 "field", violation.getPropertyPath().toString(),
                                 "message", violation.getMessage()))
                         .toList()));
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    ResponseEntity<ProblemDetail> handleUnreadableMessage(HttpMessageNotReadableException exception) {
+        var problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Request body could not be parsed");
+        problem.setTitle("Invalid request");
+        problem.setType(URI.create("https://digital-bank-java.local/problems/validation-error"));
+        return ResponseEntity.badRequest().body(problem);
     }
 
     @ExceptionHandler({

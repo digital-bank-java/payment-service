@@ -10,7 +10,6 @@ import com.digitalbank.paymentservice.application.port.in.CreatePaymentInstructi
 import com.digitalbank.paymentservice.application.port.in.CreatePaymentInstructionInputPort;
 import com.digitalbank.paymentservice.application.port.in.FailPaymentInstructionInputPort;
 import com.digitalbank.paymentservice.application.port.in.PaymentInstructionResult;
-import com.digitalbank.paymentservice.domain.exception.PaymentInstructionIdempotencyConflictException;
 import com.digitalbank.paymentservice.domain.exception.PaymentInstructionNotFoundException;
 import com.digitalbank.paymentservice.domain.model.PaymentInstructionId;
 import com.digitalbank.paymentservice.domain.model.PaymentInstructionStatus;
@@ -81,15 +80,14 @@ class PaymentInstructionControllerTest {
         CompletePaymentInstructionInputPort completePort = instructionId -> {
             throw new PaymentInstructionNotFoundException(missingId);
         };
-        FailPaymentInstructionInputPort failPort = (instructionId, reason) -> {
-            throw new PaymentInstructionIdempotencyConflictException("payment-http-001");
-        };
         var mockMvc = mockMvc(
                 command -> {
                     throw new UnsupportedOperationException();
                 },
                 completePort,
-                failPort);
+                (instructionId, reason) -> {
+                    throw new UnsupportedOperationException();
+                });
 
         mockMvc.perform(post("/internal/v1/payment-instructions")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -113,17 +111,33 @@ class PaymentInstructionControllerTest {
                 .andExpect(jsonPath("$.type")
                         .value("https://digital-bank-java.local/problems/payment-instruction-not-found"))
                 .andExpect(jsonPath("$.instructionId").value(missingId.value().toString()));
+    }
 
-        mockMvc.perform(post("/internal/v1/payment-instructions/" + missingId.value() + "/failure")
+    @Test
+    void malformedJsonUsesProblemDetails() throws Exception {
+        var mockMvc = mockMvc(
+                command -> {
+                    throw new UnsupportedOperationException();
+                },
+                instructionId -> {
+                    throw new UnsupportedOperationException();
+                },
+                (instructionId, reason) -> {
+                    throw new UnsupportedOperationException();
+                });
+
+        mockMvc.perform(post("/internal/v1/payment-instructions/22222222-2222-2222-2222-222222222222/failure")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
-                                  "reason": "provider rejected payment"
+                                  "reason":
                                 }
                                 """))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.type")
-                        .value("https://digital-bank-java.local/problems/payment-instruction-idempotency-conflict"));
+                .andExpect(status().isBadRequest())
+                .andExpect(
+                        header().string("Content-Type", org.hamcrest.Matchers.startsWith("application/problem+json")))
+                .andExpect(jsonPath("$.type").value("https://digital-bank-java.local/problems/validation-error"))
+                .andExpect(jsonPath("$.title").value("Invalid request"));
     }
 
     @Test

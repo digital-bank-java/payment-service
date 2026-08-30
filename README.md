@@ -33,7 +33,7 @@ The current output adapter is an in-memory repository used to exercise these sem
 - `POST /internal/v1/payment-instructions/{instructionId}/completion` completes a payment instruction.
 - `POST /internal/v1/payment-instructions/{instructionId}/failure` fails a payment instruction with a required JSON body containing `reason`.
 
-Error responses use `application/problem+json` for boundary validation failures, unknown instruction ids, conflicting idempotency keys, and invalid lifecycle transitions. The generated internal contract is available at `/v3/api-docs`.
+Error responses use `application/problem+json` for boundary validation failures, unknown instruction ids, conflicting create-time idempotency keys, and invalid lifecycle transitions. The generated internal contract is available at `/v3/api-docs`.
 
 ## Runtime Configuration
 
@@ -81,7 +81,7 @@ Run integration tests and package verification:
 ./mvnw --batch-mode --no-transfer-progress verify -DskipUnitTests=true
 ```
 
-The integration test disables Config Client and validates health plus the OpenAPI title and contract version using a random application port.
+Socket-level integration tests disable Config Client and validate health, OpenAPI metadata, and payment instruction HTTP behavior using a random application port. Focused controller tests use in-process `MockMvc` to cover request binding and Problem Details mapping.
 
 ## Run With Docker
 

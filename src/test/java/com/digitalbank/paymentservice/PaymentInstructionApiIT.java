@@ -1,29 +1,25 @@
 package com.digitalbank.paymentservice;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.MediaType;
-import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.MvcResult;
-import org.springframework.test.web.servlet.ResultMatcher;
+import org.springframework.boot.test.web.server.LocalServerPort;
 
-@SpringBootTest
-@AutoConfigureMockMvc
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class PaymentInstructionApiIT {
 
-    @Autowired
-    private MockMvc mockMvc;
-
+    private final HttpClient httpClient = HttpClient.newHttpClient();
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+
+    @LocalServerPort
+    private int port;
 
     @Test
     void createsPaymentInstructionAndReplaysEquivalentRequest() throws Exception {
@@ -37,19 +33,22 @@ class PaymentInstructionApiIT {
                 }
                 """;
 
-        var created = sendJson("POST", "/internal/v1/payment-instructions", requestBody, status().isCreated());
-        var replay = sendJson("POST", "/internal/v1/payment-instructions", requestBody, status().isOk());
+        var created = sendJson("POST", "/internal/v1/payment-instructions", requestBody);
+        var replay = sendJson("POST", "/internal/v1/payment-instructions", requestBody);
 
+        assertThat(created.statusCode()).isEqualTo(201);
         assertContentType(created, "application/json");
-        assertThat(created.getResponse().getHeader("Location")).contains("/internal/v1/payment-instructions/");
-        var createdBody = read(created.getResponse().getContentAsString());
+        assertThat(created.headers().firstValue("location"))
+                .hasValueSatisfying(location -> assertThat(location).contains("/internal/v1/payment-instructions/"));
+        var createdBody = read(created.body());
         assertThat(createdBody.path("instructionId").asText()).isNotBlank();
         assertThat(createdBody.path("status").asText()).isEqualTo("PENDING");
         assertThat(createdBody.path("currency").asText()).isEqualTo("AED");
         assertThat(createdBody.path("idempotentReplay").asBoolean()).isFalse();
 
-        assertThat(replay.getResponse().getHeader("Idempotent-Replay")).isEqualTo("true");
-        var replayBody = read(replay.getResponse().getContentAsString());
+        assertThat(replay.statusCode()).isEqualTo(200);
+        assertThat(replay.headers().firstValue("Idempotent-Replay")).hasValue("true");
+        var replayBody = read(replay.body());
         assertThat(replayBody.path("instructionId").asText())
                 .isEqualTo(createdBody.path("instructionId").asText());
         assertThat(replayBody.path("idempotentReplay").asBoolean()).isTrue();
@@ -58,25 +57,22 @@ class PaymentInstructionApiIT {
     @Test
     void completesAndFailsPaymentInstructions() throws Exception {
         var completedInstructionId = createInstruction("payment-http-complete");
-        var completion = send(
-                "POST", "/internal/v1/payment-instructions/" + completedInstructionId + "/completion", status().isOk());
+        var completion = send("POST", "/internal/v1/payment-instructions/" + completedInstructionId + "/completion");
 
+        assertThat(completion.statusCode()).isEqualTo(200);
         assertContentType(completion, "application/json");
-        assertThat(read(completion.getResponse().getContentAsString())
-                        .path("status")
-                        .asText())
-                .isEqualTo("COMPLETED");
+        assertThat(read(completion.body()).path("status").asText()).isEqualTo("COMPLETED");
 
         var failedInstructionId = createInstruction("payment-http-fail");
-        var failure = sendJson(
-                "POST", "/internal/v1/payment-instructions/" + failedInstructionId + "/failure", """
+        var failure = sendJson("POST", "/internal/v1/payment-instructions/" + failedInstructionId + "/failure", """
                 {
                   "reason": "provider rejected payment"
                 }
-                """, status().isOk());
+                """);
 
+        assertThat(failure.statusCode()).isEqualTo(200);
         assertContentType(failure, "application/json");
-        var failed = read(failure.getResponse().getContentAsString());
+        var failed = read(failure.body());
         assertThat(failed.path("status").asText()).isEqualTo("FAILED");
         assertThat(failed.path("failureReason").asText()).isEqualTo("provider rejected payment");
     }
@@ -90,48 +86,75 @@ class PaymentInstructionApiIT {
                   "amount": 0,
                   "currency": "dirham"
                 }
-                """, status().isBadRequest());
+                """);
 
+        assertThat(invalidCreate.statusCode()).isEqualTo(400);
         assertContentType(invalidCreate, "application/problem+json");
-        var invalidCreateProblem = read(invalidCreate.getResponse().getContentAsString());
+        var invalidCreateProblem = read(invalidCreate.body());
         assertThat(invalidCreateProblem.path("type").asText())
                 .isEqualTo("https://digital-bank-java.local/problems/validation-error");
         assertThat(invalidCreateProblem.path("title").asText()).isEqualTo("Invalid request");
         assertThat(invalidCreateProblem.path("errors")).isNotEmpty();
 
         var instructionId = createInstruction("payment-http-conflict");
-        send("POST", "/internal/v1/payment-instructions/" + instructionId + "/completion", status().isOk());
-        var conflict = sendJson(
-                "POST", "/internal/v1/payment-instructions/" + instructionId + "/failure", """
+        assertThat(send("POST", "/internal/v1/payment-instructions/" + instructionId + "/completion")
+                        .statusCode())
+                .isEqualTo(200);
+        var conflict = sendJson("POST", "/internal/v1/payment-instructions/" + instructionId + "/failure", """
                 {
                   "reason": "late provider error"
                 }
-                """, status().isConflict());
+                """);
 
+        assertThat(conflict.statusCode()).isEqualTo(409);
         assertContentType(conflict, "application/problem+json");
-        var conflictProblem = read(conflict.getResponse().getContentAsString());
+        var conflictProblem = read(conflict.body());
         assertThat(conflictProblem.path("type").asText())
                 .isEqualTo("https://digital-bank-java.local/problems/payment-instruction-state-conflict");
         assertThat(conflictProblem.path("title").asText()).isEqualTo("Payment instruction state conflict");
 
-        var missing = send(
-                "POST",
-                "/internal/v1/payment-instructions/" + UUID.randomUUID() + "/completion",
-                status().isNotFound());
+        var missing = send("POST", "/internal/v1/payment-instructions/" + UUID.randomUUID() + "/completion");
 
+        assertThat(missing.statusCode()).isEqualTo(404);
         assertContentType(missing, "application/problem+json");
-        var missingProblem = read(missing.getResponse().getContentAsString());
+        var missingProblem = read(missing.body());
         assertThat(missingProblem.path("type").asText())
                 .isEqualTo("https://digital-bank-java.local/problems/payment-instruction-not-found");
     }
 
     @Test
-    void publishesPaymentInstructionContractInOpenApiDocument() throws Exception {
-        var response = mockMvc.perform(get("/v3/api-docs").accept(MediaType.APPLICATION_JSON))
-                .andExpect(status().isOk())
-                .andReturn();
+    void malformedInstructionIdAndFailureContractStayWithinBoundaryRules() throws Exception {
+        var malformedId = send("POST", "/internal/v1/payment-instructions/not-a-uuid/completion");
 
-        var document = read(response.getResponse().getContentAsString());
+        assertThat(malformedId.statusCode()).isEqualTo(400);
+        assertContentType(malformedId, "application/problem+json");
+        var malformedIdProblem = read(malformedId.body());
+        assertThat(malformedIdProblem.path("type").asText())
+                .isEqualTo("https://digital-bank-java.local/problems/validation-error");
+
+        var response = send("GET", "/v3/api-docs");
+        assertThat(response.statusCode()).isEqualTo(200);
+        var document = read(response.body());
+        var failureExamples = document.path("paths")
+                .path("/internal/v1/payment-instructions/{instructionId}/failure")
+                .path("post")
+                .path("responses")
+                .path("409")
+                .path("content")
+                .path("application/problem+json")
+                .path("examples");
+
+        assertThat(failureExamples.has("payment-instruction-state-conflict")).isTrue();
+        assertThat(failureExamples.has("payment-instruction-idempotency-conflict"))
+                .isFalse();
+    }
+
+    @Test
+    void publishesPaymentInstructionContractInOpenApiDocument() throws Exception {
+        var response = send("GET", "/v3/api-docs");
+
+        assertThat(response.statusCode()).isEqualTo(200);
+        var document = read(response.body());
         assertThat(document.path("paths").has("/internal/v1/payment-instructions"))
                 .isTrue();
         assertThat(document.path("paths")
@@ -149,10 +172,7 @@ class PaymentInstructionApiIT {
     }
 
     private String createInstruction(String idempotencyKey) throws Exception {
-        var response = sendJson(
-                "POST",
-                "/internal/v1/payment-instructions",
-                """
+        var response = sendJson("POST", "/internal/v1/payment-instructions", """
                 {
                   "idempotencyKey": "%s",
                   "correlationId": "%s",
@@ -160,30 +180,30 @@ class PaymentInstructionApiIT {
                   "currency": "USD",
                   "description": "Lifecycle setup"
                 }
-                """.formatted(idempotencyKey + "-" + UUID.randomUUID(), "correlation-" + UUID.randomUUID()),
-                status().isCreated());
+                """.formatted(
+                        idempotencyKey + "-" + UUID.randomUUID(), "correlation-" + UUID.randomUUID()));
 
-        return read(response.getResponse().getContentAsString())
-                .path("instructionId")
-                .asText();
+        assertThat(response.statusCode()).isEqualTo(201);
+        return read(response.body()).path("instructionId").asText();
     }
 
-    private MvcResult send(String method, String path, ResultMatcher expectedStatus) throws Exception {
-        return mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request(
-                                HttpMethod.valueOf(method), path)
-                        .accept(MediaType.APPLICATION_JSON))
-                .andExpect(expectedStatus)
-                .andReturn();
+    private HttpResponse<String> send(String method, String path) throws Exception {
+        return httpClient.send(
+                HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
+                        .method(method, HttpRequest.BodyPublishers.noBody())
+                        .header("Accept", "application/json")
+                        .build(),
+                HttpResponse.BodyHandlers.ofString());
     }
 
-    private MvcResult sendJson(String method, String path, String body, ResultMatcher expectedStatus) throws Exception {
-        return mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request(
-                                HttpMethod.valueOf(method), path)
-                        .accept(MediaType.APPLICATION_JSON)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(body))
-                .andExpect(expectedStatus)
-                .andReturn();
+    private HttpResponse<String> sendJson(String method, String path, String body) throws Exception {
+        return httpClient.send(
+                HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
+                        .method(method, HttpRequest.BodyPublishers.ofString(body))
+                        .header("Accept", "application/json")
+                        .header("Content-Type", "application/json")
+                        .build(),
+                HttpResponse.BodyHandlers.ofString());
     }
 
     private com.fasterxml.jackson.databind.JsonNode read(String body) {
@@ -194,7 +214,8 @@ class PaymentInstructionApiIT {
         }
     }
 
-    private static void assertContentType(MvcResult response, String expectedPrefix) {
-        assertThat(response.getResponse().getContentType()).startsWith(expectedPrefix);
+    private static void assertContentType(HttpResponse<String> response, String expectedPrefix) {
+        assertThat(response.headers().firstValue("content-type"))
+                .hasValueSatisfying(contentType -> assertThat(contentType).startsWith(expectedPrefix));
     }
 }

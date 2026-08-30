@@ -1,40 +1,46 @@
 package com.digitalbank.paymentservice;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.http.MediaType;
-import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.boot.test.web.server.LocalServerPort;
 
-@SpringBootTest
-@AutoConfigureMockMvc
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class PaymentServiceApplicationIT {
 
-    @Autowired
-    private MockMvc mockMvc;
+    private final HttpClient httpClient = HttpClient.newHttpClient();
+
+    @LocalServerPort
+    private int port;
 
     @Test
     void healthEndpointReportsUp() throws Exception {
-        var response = mockMvc.perform(get("/actuator/health").accept(MediaType.APPLICATION_JSON))
-                .andExpect(status().isOk())
-                .andReturn();
+        var response = get("/actuator/health");
 
-        assertThat(response.getResponse().getContentAsString()).contains("\"status\":\"UP\"");
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.body()).contains("\"status\":\"UP\"");
     }
 
     @Test
     void openApiDocumentPublishesServiceMetadata() throws Exception {
-        var response = mockMvc.perform(get("/v3/api-docs").accept(MediaType.APPLICATION_JSON))
-                .andExpect(status().isOk())
-                .andReturn();
+        var response = get("/v3/api-docs");
 
-        assertThat(response.getResponse().getContentAsString())
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.body())
                 .contains("\"title\":\"Digital Bank Payment Service API\"")
                 .contains("\"version\":\"1.0.0\"");
+    }
+
+    private HttpResponse<String> get(String path) throws Exception {
+        return httpClient.send(
+                HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
+                        .GET()
+                        .build(),
+                HttpResponse.BodyHandlers.ofString());
     }
 }

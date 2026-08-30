@@ -212,24 +212,15 @@ class PaymentInstructionController {
     @ApiResponse(
             responseCode = "409",
             description = "Payment instruction lifecycle conflict",
-            content = {
-                @Content(
-                        mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
-                        schema = @Schema(implementation = ProblemDetail.class),
-                        examples =
-                                @ExampleObject(
-                                        name = "payment-instruction-state-conflict",
-                                        summary = "Lifecycle state conflict",
-                                        value = STATE_CONFLICT_PROBLEM_EXAMPLE)),
-                @Content(
-                        mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
-                        schema = @Schema(implementation = ProblemDetail.class),
-                        examples =
-                                @ExampleObject(
-                                        name = "payment-instruction-idempotency-conflict",
-                                        summary = "Conflicting payment instruction request",
-                                        value = IDEMPOTENCY_CONFLICT_PROBLEM_EXAMPLE))
-            })
+            content =
+                    @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class),
+                            examples =
+                                    @ExampleObject(
+                                            name = "payment-instruction-state-conflict",
+                                            summary = "Lifecycle state conflict",
+                                            value = STATE_CONFLICT_PROBLEM_EXAMPLE)))
     ResponseEntity<PaymentInstructionResponse> failPaymentInstruction(
             @PathVariable UUID instructionId, @Valid @RequestBody FailPaymentInstructionRequest request) {
         var result = failPaymentInstructionInputPort.fail(new PaymentInstructionId(instructionId), request.reason());
