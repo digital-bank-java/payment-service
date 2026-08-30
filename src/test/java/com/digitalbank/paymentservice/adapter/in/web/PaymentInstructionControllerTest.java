@@ -1,5 +1,6 @@
 package com.digitalbank.paymentservice.adapter.in.web;
 
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -9,6 +10,7 @@ import com.digitalbank.paymentservice.application.port.in.CompletePaymentInstruc
 import com.digitalbank.paymentservice.application.port.in.CreatePaymentInstructionCommand;
 import com.digitalbank.paymentservice.application.port.in.CreatePaymentInstructionInputPort;
 import com.digitalbank.paymentservice.application.port.in.FailPaymentInstructionInputPort;
+import com.digitalbank.paymentservice.application.port.in.GetPaymentInstructionInputPort;
 import com.digitalbank.paymentservice.application.port.in.PaymentInstructionResult;
 import com.digitalbank.paymentservice.domain.exception.PaymentInstructionNotFoundException;
 import com.digitalbank.paymentservice.domain.model.PaymentInstructionId;
@@ -22,6 +24,40 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 class PaymentInstructionControllerTest {
+
+    @Test
+    void getEndpointReturnsStablePaymentInstructionResponse() throws Exception {
+        var instructionId = new PaymentInstructionId(UUID.fromString("44444444-4444-4444-4444-444444444444"));
+        var response = new PaymentInstructionResult(
+                instructionId,
+                "correlation-http-004",
+                new BigDecimal("75.00"),
+                "EUR",
+                PaymentInstructionStatus.PENDING,
+                null,
+                false);
+        var mockMvc = mockMvc(
+                command -> {
+                    throw new UnsupportedOperationException();
+                },
+                instructionIdValue -> response,
+                instructionIdValue -> {
+                    throw new UnsupportedOperationException();
+                },
+                (instructionIdValue, reason) -> {
+                    throw new UnsupportedOperationException();
+                });
+
+        mockMvc.perform(get("/internal/v1/payment-instructions/" + instructionId.value()))
+                .andExpect(status().isOk())
+                .andExpect(
+                        jsonPath("$.instructionId").value(instructionId.value().toString()))
+                .andExpect(jsonPath("$.correlationId").value("correlation-http-004"))
+                .andExpect(jsonPath("$.amount").value(75.0))
+                .andExpect(jsonPath("$.currency").value("EUR"))
+                .andExpect(jsonPath("$.status").value("PENDING"))
+                .andExpect(jsonPath("$.idempotentReplay").value(false));
+    }
 
     @Test
     void createEndpointMapsRequestBodyToInputPortAndLocationHeader() throws Exception {
@@ -114,6 +150,30 @@ class PaymentInstructionControllerTest {
     }
 
     @Test
+    void missingPaymentInstructionUsesProblemDetailsOnGet() throws Exception {
+        var missingId = new PaymentInstructionId(UUID.fromString("55555555-5555-5555-5555-555555555555"));
+        var mockMvc = mockMvc(
+                command -> {
+                    throw new UnsupportedOperationException();
+                },
+                instructionId -> {
+                    throw new PaymentInstructionNotFoundException(missingId);
+                },
+                instructionId -> {
+                    throw new UnsupportedOperationException();
+                },
+                (instructionId, reason) -> {
+                    throw new UnsupportedOperationException();
+                });
+
+        mockMvc.perform(get("/internal/v1/payment-instructions/" + missingId.value()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.type")
+                        .value("https://digital-bank-java.local/problems/payment-instruction-not-found"))
+                .andExpect(jsonPath("$.instructionId").value(missingId.value().toString()));
+    }
+
+    @Test
     void malformedJsonUsesProblemDetails() throws Exception {
         var mockMvc = mockMvc(
                 command -> {
@@ -191,7 +251,22 @@ class PaymentInstructionControllerTest {
             CreatePaymentInstructionInputPort createPort,
             CompletePaymentInstructionInputPort completePort,
             FailPaymentInstructionInputPort failPort) {
-        return MockMvcBuilders.standaloneSetup(new PaymentInstructionController(createPort, completePort, failPort))
+        return mockMvc(
+                createPort,
+                instructionId -> {
+                    throw new UnsupportedOperationException();
+                },
+                completePort,
+                failPort);
+    }
+
+    private static MockMvc mockMvc(
+            CreatePaymentInstructionInputPort createPort,
+            GetPaymentInstructionInputPort getPort,
+            CompletePaymentInstructionInputPort completePort,
+            FailPaymentInstructionInputPort failPort) {
+        return MockMvcBuilders.standaloneSetup(
+                        new PaymentInstructionController(createPort, getPort, completePort, failPort))
                 .setControllerAdvice(new ApiExceptionHandler())
                 .build();
     }

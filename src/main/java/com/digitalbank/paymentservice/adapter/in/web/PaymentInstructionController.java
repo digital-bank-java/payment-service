@@ -3,6 +3,7 @@ package com.digitalbank.paymentservice.adapter.in.web;
 import com.digitalbank.paymentservice.application.port.in.CompletePaymentInstructionInputPort;
 import com.digitalbank.paymentservice.application.port.in.CreatePaymentInstructionInputPort;
 import com.digitalbank.paymentservice.application.port.in.FailPaymentInstructionInputPort;
+import com.digitalbank.paymentservice.application.port.in.GetPaymentInstructionInputPort;
 import com.digitalbank.paymentservice.domain.model.PaymentInstructionId;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -18,6 +19,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -73,16 +75,57 @@ class PaymentInstructionController {
             """;
 
     private final CreatePaymentInstructionInputPort createPaymentInstructionInputPort;
+    private final GetPaymentInstructionInputPort getPaymentInstructionInputPort;
     private final CompletePaymentInstructionInputPort completePaymentInstructionInputPort;
     private final FailPaymentInstructionInputPort failPaymentInstructionInputPort;
 
     PaymentInstructionController(
             CreatePaymentInstructionInputPort createPaymentInstructionInputPort,
+            GetPaymentInstructionInputPort getPaymentInstructionInputPort,
             CompletePaymentInstructionInputPort completePaymentInstructionInputPort,
             FailPaymentInstructionInputPort failPaymentInstructionInputPort) {
         this.createPaymentInstructionInputPort = createPaymentInstructionInputPort;
+        this.getPaymentInstructionInputPort = getPaymentInstructionInputPort;
         this.completePaymentInstructionInputPort = completePaymentInstructionInputPort;
         this.failPaymentInstructionInputPort = failPaymentInstructionInputPort;
+    }
+
+    @GetMapping("/internal/v1/payment-instructions/{instructionId}")
+    @Operation(summary = "Retrieve a payment instruction")
+    @ApiResponse(
+            responseCode = "200",
+            description = "Payment instruction retrieved",
+            content =
+                    @Content(
+                            mediaType = MediaType.APPLICATION_JSON_VALUE,
+                            schema = @Schema(implementation = PaymentInstructionResponse.class)))
+    @ApiResponse(
+            responseCode = "400",
+            description = "Invalid payment instruction identifier",
+            content =
+                    @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class),
+                            examples =
+                                    @ExampleObject(
+                                            name = "validation-error",
+                                            summary = "Malformed payment instruction identifier",
+                                            value = VALIDATION_PROBLEM_EXAMPLE)))
+    @ApiResponse(
+            responseCode = "404",
+            description = "Payment instruction not found",
+            content =
+                    @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class),
+                            examples =
+                                    @ExampleObject(
+                                            name = "payment-instruction-not-found",
+                                            summary = "Unknown payment instruction",
+                                            value = NOT_FOUND_PROBLEM_EXAMPLE)))
+    ResponseEntity<PaymentInstructionResponse> getPaymentInstruction(@PathVariable UUID instructionId) {
+        var result = getPaymentInstructionInputPort.get(new PaymentInstructionId(instructionId));
+        return ResponseEntity.ok(PaymentInstructionResponse.from(result));
     }
 
     @PostMapping("/internal/v1/payment-instructions")
@@ -147,6 +190,18 @@ class PaymentInstructionController {
                     @Content(
                             mediaType = MediaType.APPLICATION_JSON_VALUE,
                             schema = @Schema(implementation = PaymentInstructionResponse.class)))
+    @ApiResponse(
+            responseCode = "400",
+            description = "Invalid payment instruction identifier",
+            content =
+                    @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class),
+                            examples =
+                                    @ExampleObject(
+                                            name = "validation-error",
+                                            summary = "Malformed payment instruction identifier",
+                                            value = VALIDATION_PROBLEM_EXAMPLE)))
     @ApiResponse(
             responseCode = "404",
             description = "Payment instruction not found",

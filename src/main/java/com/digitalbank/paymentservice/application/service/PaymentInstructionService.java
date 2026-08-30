@@ -4,9 +4,11 @@ import com.digitalbank.paymentservice.application.port.in.CompletePaymentInstruc
 import com.digitalbank.paymentservice.application.port.in.CreatePaymentInstructionCommand;
 import com.digitalbank.paymentservice.application.port.in.CreatePaymentInstructionInputPort;
 import com.digitalbank.paymentservice.application.port.in.FailPaymentInstructionInputPort;
+import com.digitalbank.paymentservice.application.port.in.GetPaymentInstructionInputPort;
 import com.digitalbank.paymentservice.application.port.in.PaymentInstructionResult;
 import com.digitalbank.paymentservice.application.port.out.PaymentInstructionRepository;
 import com.digitalbank.paymentservice.domain.exception.PaymentInstructionIdempotencyConflictException;
+import com.digitalbank.paymentservice.domain.exception.PaymentInstructionNotFoundException;
 import com.digitalbank.paymentservice.domain.model.PaymentInstruction;
 import com.digitalbank.paymentservice.domain.model.PaymentInstructionId;
 import java.time.Clock;
@@ -16,6 +18,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class PaymentInstructionService
         implements CreatePaymentInstructionInputPort,
+                GetPaymentInstructionInputPort,
                 CompletePaymentInstructionInputPort,
                 FailPaymentInstructionInputPort {
 
@@ -43,6 +46,15 @@ public class PaymentInstructionService
         }
 
         return PaymentInstructionResult.from(saved.instruction(), false);
+    }
+
+    @Override
+    public PaymentInstructionResult get(PaymentInstructionId instructionId) {
+        Objects.requireNonNull(instructionId, "Payment instruction id is required");
+        return repository
+                .findById(instructionId)
+                .map(instruction -> PaymentInstructionResult.from(instruction, false))
+                .orElseThrow(() -> new PaymentInstructionNotFoundException(instructionId));
     }
 
     @Override

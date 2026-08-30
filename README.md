@@ -30,10 +30,11 @@ The current output adapter is an in-memory repository used only to exercise thes
 
 - `POST /internal/v1/payment-instructions` creates a payment instruction and returns `201 Created` with `Location: /internal/v1/payment-instructions/{instructionId}`.
 - Repeating an equivalent create request returns `200 OK` with `Idempotent-Replay: true`.
+- `GET /internal/v1/payment-instructions/{instructionId}` retrieves the stable payment instruction representation, or returns `404 Not Found` when the instruction does not exist.
 - `POST /internal/v1/payment-instructions/{instructionId}/completion` completes a payment instruction.
 - `POST /internal/v1/payment-instructions/{instructionId}/failure` fails a payment instruction with a required JSON body containing `reason`.
 
-Error responses use `application/problem+json` for boundary validation failures, unknown instruction ids, conflicting create-time idempotency keys, and invalid lifecycle transitions. The generated internal contract is available at `/v3/api-docs`.
+Error responses use `application/problem+json` for boundary validation failures, including malformed instruction ids, unknown instruction ids, conflicting create-time idempotency keys, and invalid lifecycle transitions. The generated internal contract is available at `/v3/api-docs`.
 
 ## Runtime Configuration
 

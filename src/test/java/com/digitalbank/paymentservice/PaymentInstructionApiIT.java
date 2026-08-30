@@ -78,6 +78,27 @@ class PaymentInstructionApiIT {
     }
 
     @Test
+    void retrievesCreatedPaymentInstructionUsingLocationResource() throws Exception {
+        var instructionId = createInstruction("payment-http-retrieve");
+
+        var retrieved = send("GET", "/internal/v1/payment-instructions/" + instructionId);
+
+        assertThat(retrieved.statusCode()).isEqualTo(200);
+        assertContentType(retrieved, "application/json");
+        var body = read(retrieved.body());
+        assertThat(body.path("instructionId").asText()).isEqualTo(instructionId);
+        assertThat(body.path("status").asText()).isEqualTo("PENDING");
+        assertThat(body.path("idempotentReplay").asBoolean()).isFalse();
+
+        var missing = send("GET", "/internal/v1/payment-instructions/" + UUID.randomUUID());
+
+        assertThat(missing.statusCode()).isEqualTo(404);
+        assertContentType(missing, "application/problem+json");
+        assertThat(read(missing.body()).path("type").asText())
+                .isEqualTo("https://digital-bank-java.local/problems/payment-instruction-not-found");
+    }
+
+    @Test
     void returnsProblemDetailsForLifecycleValidationAndConflicts() throws Exception {
         var invalidCreate = sendJson("POST", "/internal/v1/payment-instructions", """
                 {
@@ -163,6 +184,13 @@ class PaymentInstructionApiIT {
         assertThat(malformedIdProblem.path("type").asText())
                 .isEqualTo("https://digital-bank-java.local/problems/validation-error");
 
+        var malformedGetId = send("GET", "/internal/v1/payment-instructions/not-a-uuid");
+
+        assertThat(malformedGetId.statusCode()).isEqualTo(400);
+        assertContentType(malformedGetId, "application/problem+json");
+        assertThat(read(malformedGetId.body()).path("type").asText())
+                .isEqualTo("https://digital-bank-java.local/problems/validation-error");
+
         var response = send("GET", "/v3/api-docs");
         assertThat(response.statusCode()).isEqualTo(200);
         var document = read(response.body());
@@ -188,6 +216,14 @@ class PaymentInstructionApiIT {
         var document = read(response.body());
         assertThat(document.path("paths").has("/internal/v1/payment-instructions"))
                 .isTrue();
+        var getOperation = document.path("paths")
+                .path("/internal/v1/payment-instructions/{instructionId}")
+                .path("get");
+        assertThat(getOperation.path("responses").has("200")).isTrue();
+        assertThat(getOperation.path("responses").has("400")).isTrue();
+        assertThat(getOperation.path("responses").has("404")).isTrue();
+        assertThat(getOperation.path("responses").path("404").path("content").has("application/problem+json"))
+                .isTrue();
         assertThat(document.path("paths")
                         .path("/internal/v1/payment-instructions")
                         .path("post")
@@ -196,6 +232,12 @@ class PaymentInstructionApiIT {
                 .isTrue();
         assertThat(document.path("paths")
                         .path("/internal/v1/payment-instructions/{instructionId}/failure")
+                        .path("post")
+                        .path("responses")
+                        .has("400"))
+                .isTrue();
+        assertThat(document.path("paths")
+                        .path("/internal/v1/payment-instructions/{instructionId}/completion")
                         .path("post")
                         .path("responses")
                         .has("400"))
