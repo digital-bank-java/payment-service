@@ -1,0 +1,12 @@
+target/
+.git/
+.github/
+.settings/
+.classpath
+.project
+.sts4-cache/
+.idea/
+.vscode/
+.DS_Store
+README.md
+AGENTS.md
