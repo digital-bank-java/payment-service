@@ -6,6 +6,7 @@ import com.digitalbank.paymentservice.application.port.in.FailPaymentInstruction
 import com.digitalbank.paymentservice.application.port.in.GetPaymentInstructionInputPort;
 import com.digitalbank.paymentservice.domain.model.PaymentInstructionId;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.headers.Header;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -193,6 +194,11 @@ class PaymentInstructionController {
     @ApiResponse(
             responseCode = "201",
             description = "Payment instruction created",
+            headers =
+                    @Header(
+                            name = "Location",
+                            description = "Canonical URI of the created payment instruction",
+                            schema = @Schema(type = "string", format = "uri")),
             content =
                     @Content(
                             mediaType = MediaType.APPLICATION_JSON_VALUE,
@@ -200,6 +206,19 @@ class PaymentInstructionController {
     @ApiResponse(
             responseCode = "200",
             description = "Idempotent replay of an existing payment instruction",
+            headers = {
+                @Header(
+                        name = "Location",
+                        description = "Canonical URI of the existing payment instruction",
+                        schema = @Schema(type = "string", format = "uri")),
+                @Header(
+                        name = "Idempotent-Replay",
+                        description = "Indicates that the request replayed an existing instruction",
+                        schema =
+                                @Schema(
+                                        type = "string",
+                                        allowableValues = {"true"}))
+            },
             content =
                     @Content(
                             mediaType = MediaType.APPLICATION_JSON_VALUE,
