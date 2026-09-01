@@ -10,6 +10,7 @@ import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.net.URI;
@@ -27,6 +28,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @Tag(name = "Payment Instructions")
+@SecurityRequirement(name = "bearer-jwt")
 @Validated
 class PaymentInstructionController {
 
@@ -74,6 +76,26 @@ class PaymentInstructionController {
             }
             """;
 
+    private static final String AUTHENTICATION_PROBLEM_EXAMPLE = """
+            {
+              "type": "urn:digital-bank:payment:authentication-required",
+              "title": "Payment authentication required",
+              "status": 401,
+              "detail": "Authentication is required to access this payment resource.",
+              "instance": "/internal/v1/payment-instructions"
+            }
+            """;
+
+    private static final String ACCESS_DENIED_PROBLEM_EXAMPLE = """
+            {
+              "type": "urn:digital-bank:payment:access-denied",
+              "title": "Payment access denied",
+              "status": 403,
+              "detail": "The authenticated principal is not allowed to access this payment resource.",
+              "instance": "/internal/v1/payment-instructions"
+            }
+            """;
+
     private final CreatePaymentInstructionInputPort createPaymentInstructionInputPort;
     private final GetPaymentInstructionInputPort getPaymentInstructionInputPort;
     private final CompletePaymentInstructionInputPort completePaymentInstructionInputPort;
@@ -92,6 +114,25 @@ class PaymentInstructionController {
 
     @GetMapping("/internal/v1/payment-instructions/{instructionId}")
     @Operation(summary = "Retrieve a payment instruction")
+    @ApiResponse(
+            responseCode = "401",
+            description = "Authentication is required",
+            content =
+                    @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class),
+                            examples =
+                                    @ExampleObject(
+                                            name = "authentication-required",
+                                            value = AUTHENTICATION_PROBLEM_EXAMPLE)))
+    @ApiResponse(
+            responseCode = "403",
+            description = "The caller lacks the payment.internal scope",
+            content =
+                    @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class),
+                            examples = @ExampleObject(name = "access-denied", value = ACCESS_DENIED_PROBLEM_EXAMPLE)))
     @ApiResponse(
             responseCode = "200",
             description = "Payment instruction retrieved",
@@ -130,6 +171,25 @@ class PaymentInstructionController {
 
     @PostMapping("/internal/v1/payment-instructions")
     @Operation(summary = "Create a payment instruction")
+    @ApiResponse(
+            responseCode = "401",
+            description = "Authentication is required",
+            content =
+                    @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class),
+                            examples =
+                                    @ExampleObject(
+                                            name = "authentication-required",
+                                            value = AUTHENTICATION_PROBLEM_EXAMPLE)))
+    @ApiResponse(
+            responseCode = "403",
+            description = "The caller lacks the payment.internal scope",
+            content =
+                    @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class),
+                            examples = @ExampleObject(name = "access-denied", value = ACCESS_DENIED_PROBLEM_EXAMPLE)))
     @ApiResponse(
             responseCode = "201",
             description = "Payment instruction created",
@@ -184,6 +244,25 @@ class PaymentInstructionController {
     @PostMapping("/internal/v1/payment-instructions/{instructionId}/completion")
     @Operation(summary = "Complete a payment instruction")
     @ApiResponse(
+            responseCode = "401",
+            description = "Authentication is required",
+            content =
+                    @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class),
+                            examples =
+                                    @ExampleObject(
+                                            name = "authentication-required",
+                                            value = AUTHENTICATION_PROBLEM_EXAMPLE)))
+    @ApiResponse(
+            responseCode = "403",
+            description = "The caller lacks the payment.internal scope",
+            content =
+                    @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class),
+                            examples = @ExampleObject(name = "access-denied", value = ACCESS_DENIED_PROBLEM_EXAMPLE)))
+    @ApiResponse(
             responseCode = "200",
             description = "Payment instruction completed",
             content =
@@ -233,6 +312,25 @@ class PaymentInstructionController {
 
     @PostMapping("/internal/v1/payment-instructions/{instructionId}/failure")
     @Operation(summary = "Fail a payment instruction")
+    @ApiResponse(
+            responseCode = "401",
+            description = "Authentication is required",
+            content =
+                    @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class),
+                            examples =
+                                    @ExampleObject(
+                                            name = "authentication-required",
+                                            value = AUTHENTICATION_PROBLEM_EXAMPLE)))
+    @ApiResponse(
+            responseCode = "403",
+            description = "The caller lacks the payment.internal scope",
+            content =
+                    @Content(
+                            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                            schema = @Schema(implementation = ProblemDetail.class),
+                            examples = @ExampleObject(name = "access-denied", value = ACCESS_DENIED_PROBLEM_EXAMPLE)))
     @ApiResponse(
             responseCode = "200",
             description = "Payment instruction failed",

@@ -78,6 +78,7 @@ jobs:
         run: |
           cleanup() {
             docker rm --force payment-service-ci > /dev/null 2>&1 || true
+            docker rm --force payment-service-postgres-ci > /dev/null 2>&1 || true
             if [[ -n "${mock_server_pid:-}" ]]; then
               kill "${mock_server_pid}" > /dev/null 2>&1 || true
             fi
@@ -87,6 +88,31 @@ jobs:
           test "$(docker image inspect \
             --format '{{.Config.User}}' \
             digital-bank-java/payment-service:ci)" = "10001:10001"
+
+          docker run --detach \
+            --name payment-service-postgres-ci \
+            --publish 5432:5432 \
+            --env POSTGRES_DB=payment_service_ci \
+            --env POSTGRES_USER=payment_service \
+            --env POSTGRES_PASSWORD=payment_service \
+            postgres:16-alpine
+
+          database_ready=false
+          for attempt in {1..30}; do
+            if docker exec payment-service-postgres-ci \
+              pg_isready \
+              --username payment_service \
+              --dbname payment_service_ci > /dev/null 2>&1; then
+              database_ready=true
+              break
+            fi
+            sleep 2
+          done
+
+          if [[ "${database_ready}" != "true" ]]; then
+            docker logs payment-service-postgres-ci
+            exit 1
+          fi
 
           python3 - <<'PY' &
           import json
@@ -103,6 +129,12 @@ jobs:
                       "name": "ci",
                       "source": {
                           "server.port": 8085,
+                          "spring.datasource.url": "jdbc:postgresql://host.docker.internal:5432/payment_service_ci",
+                          "spring.datasource.username": "payment_service",
+                          "spring.datasource.password": "payment_service",
+                          "spring.datasource.driver-class-name": "org.postgresql.Driver",
+                          "spring.security.oauth2.resourceserver.jwt.issuer-uri": "https://issuer.test.internal",
+                          "spring.security.oauth2.resourceserver.jwt.jwk-set-uri": "http://host.docker.internal:8888/jwks",
                       },
                   }
               ],
