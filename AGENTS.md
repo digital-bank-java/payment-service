@@ -7,6 +7,7 @@
 ## Current Boundaries
 
 - Owns service bootstrap, Config Client, health probes, OpenAPI metadata, packaging, and deployment.
+- Owns the transport-neutral payment instruction lifecycle foundation and its idempotency/correlation boundary.
 - Does not own customer data, account balances, ledger postings, transfer saga orchestration, Kafka behavior, persistence, or secrets.
 - Do not add public payment routes without a supporting issue and API contract work.
 
@@ -30,6 +31,8 @@ helm lint helm --strict --values helm/values-sit.yaml
 ## Testing
 
 Use unit tests for isolated application/domain behavior when those layers exist. Use integration tests for HTTP and infrastructure-backed behavior. Keep `./mvnw verify` green before merge.
+
+The payment instruction foundation currently uses an in-memory output adapter for lifecycle tests. Do not mistake it for production persistence; durable payment state and external payment-provider integration require separately tracked work.
 
 ## Architecture
 
