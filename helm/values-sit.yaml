@@ -1,0 +1,3 @@
+runtime:
+  profile: sit
+  configServerUrl: http://config-server:8888

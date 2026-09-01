@@ -1,0 +1,160 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Maven verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Set up Java
+        uses: actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287 # v5.3.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Verify application
+        run: ./mvnw --batch-mode --no-transfer-progress verify
+
+  helm:
+    name: Helm validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Set up Helm
+        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2 # v5.0.0
+        with:
+          version: v4.2.0
+      - name: Lint chart
+        run: helm lint helm --strict --values helm/values-sit.yaml
+      - name: Render chart
+        run: |
+          helm template payment-service helm \
+            --namespace digital-bank-sit \
+            --values helm/values-sit.yaml \
+            --set image.tag="${GITHUB_SHA}" \
+            > rendered.yaml
+          test -s rendered.yaml
+
+  container:
+    name: Container build and smoke test
+    needs:
+      - test
+      - helm
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+      - name: Build container image
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          load: true
+          push: false
+          tags: digital-bank-java/payment-service:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test container
+        shell: bash
+        run: |
+          cleanup() {
+            docker rm --force payment-service-ci > /dev/null 2>&1 || true
+            if [[ -n "${mock_server_pid:-}" ]]; then
+              kill "${mock_server_pid}" > /dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT
+
+          test "$(docker image inspect \
+            --format '{{.Config.User}}' \
+            digital-bank-java/payment-service:ci)" = "10001:10001"
+
+          python3 - <<'PY' &
+          import json
+          from http.server import BaseHTTPRequestHandler, HTTPServer
+
+          response = {
+              "name": "payment-service",
+              "profiles": ["default"],
+              "label": None,
+              "version": "ci",
+              "state": None,
+              "propertySources": [
+                  {
+                      "name": "ci",
+                      "source": {
+                          "server.port": 8085,
+                      },
+                  }
+              ],
+          }
+
+          class Handler(BaseHTTPRequestHandler):
+              def do_GET(self):
+                  if not self.path.startswith("/payment-service/"):
+                      self.send_error(404)
+                      return
+                  body = json.dumps(response).encode()
+                  self.send_response(200)
+                  self.send_header("Content-Type", "application/json")
+                  self.send_header("Content-Length", str(len(body)))
+                  self.end_headers()
+                  self.wfile.write(body)
+
+              def log_message(self, format, *args):
+                  pass
+
+          HTTPServer(("0.0.0.0", 8888), Handler).serve_forever()
+          PY
+          mock_server_pid=$!
+
+          for attempt in {1..10}; do
+            if curl --fail --silent \
+              http://localhost:8888/payment-service/default > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          docker run --detach \
+            --name payment-service-ci \
+            --read-only \
+            --tmpfs /tmp:rw,size=64m \
+            --publish 8085:8085 \
+            --add-host host.docker.internal:host-gateway \
+            --env CONFIG_SERVER_URL=http://host.docker.internal:8888 \
+            digital-bank-java/payment-service:ci
+
+          ready=false
+          for attempt in {1..30}; do
+            if curl --fail --silent \
+              http://localhost:8085/actuator/health > /dev/null; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+
+          if [[ "${ready}" != "true" ]]; then
+            docker logs payment-service-ci
+            exit 1
+          fi
