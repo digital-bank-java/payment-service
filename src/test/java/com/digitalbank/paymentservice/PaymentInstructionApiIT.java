@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.digitalbank.paymentservice.application.port.in.CreatePaymentInstructionCommand;
 import com.digitalbank.paymentservice.application.port.out.PaymentInstructionRepository;
 import com.digitalbank.paymentservice.application.service.PaymentInstructionService;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.net.URI;
@@ -13,6 +14,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Clock;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -122,6 +124,27 @@ class PaymentInstructionApiIT {
         assertContentType(missing, "application/problem+json");
         assertThat(read(missing.body()).path("type").asText())
                 .isEqualTo("https://digital-bank-java.local/problems/payment-instruction-not-found");
+    }
+
+    @Test
+    void followsTheLocationHeaderReturnedByCreate() throws Exception {
+        var created = sendJson("POST", "/internal/v1/payment-instructions", """
+                {
+                  "idempotencyKey": "payment-http-location-%s",
+                  "correlationId": "correlation-location",
+                  "amount": 25.00,
+                  "currency": "USD",
+                  "description": "Location contract"
+                }
+                """.formatted(UUID.randomUUID()));
+
+        assertThat(created.statusCode()).isEqualTo(201);
+        var location = created.headers().firstValue("location").orElseThrow();
+        var retrieved = send("GET", location);
+
+        assertThat(retrieved.statusCode()).isEqualTo(200);
+        assertThat(read(retrieved.body()).path("instructionId").asText())
+                .isEqualTo(read(created.body()).path("instructionId").asText());
     }
 
     @Test
@@ -379,6 +402,111 @@ class PaymentInstructionApiIT {
                 .isTrue();
     }
 
+    @Test
+    void documentsEverySupportedPaymentInstructionResponseCode() throws Exception {
+        var response = send("GET", "/v3/api-docs");
+
+        assertThat(response.statusCode()).isEqualTo(200);
+        var paths = read(response.body()).path("paths");
+        assertResponseContract(
+                paths.path("/internal/v1/payment-instructions/{instructionId}").path("get"),
+                Set.of("200", "400", "401", "403", "404"));
+        assertResponseContract(
+                paths.path("/internal/v1/payment-instructions").path("post"),
+                Set.of("200", "201", "400", "401", "403", "409"));
+        assertResponseContract(
+                paths.path("/internal/v1/payment-instructions/{instructionId}/completion")
+                        .path("post"),
+                Set.of("200", "400", "401", "403", "404", "409"));
+        assertResponseContract(
+                paths.path("/internal/v1/payment-instructions/{instructionId}/failure")
+                        .path("post"),
+                Set.of("200", "400", "401", "403", "404", "409"));
+    }
+
+    @Test
+    void documentsResourceAndReplayHeadersForCreateResponses() throws Exception {
+        var response = send("GET", "/v3/api-docs");
+
+        assertThat(response.statusCode()).isEqualTo(200);
+        var responses = read(response.body())
+                .path("paths")
+                .path("/internal/v1/payment-instructions")
+                .path("post")
+                .path("responses");
+
+        assertThat(responses
+                        .path("201")
+                        .path("headers")
+                        .path("Location")
+                        .path("schema")
+                        .path("type")
+                        .asText())
+                .isEqualTo("string");
+        assertThat(responses
+                        .path("200")
+                        .path("headers")
+                        .path("Location")
+                        .path("schema")
+                        .path("type")
+                        .asText())
+                .isEqualTo("string");
+        assertThat(responses
+                        .path("200")
+                        .path("headers")
+                        .path("Idempotent-Replay")
+                        .path("schema")
+                        .path("type")
+                        .asText())
+                .isEqualTo("string");
+    }
+
+    @Test
+    void documentsPaymentInstructionRequestAndResponseSchemas() throws Exception {
+        var response = send("GET", "/v3/api-docs");
+
+        assertThat(response.statusCode()).isEqualTo(200);
+        var schemas = read(response.body()).path("components").path("schemas");
+        var request = schemas.path("CreatePaymentInstructionRequest");
+        var failureRequest = schemas.path("FailPaymentInstructionRequest");
+        var resource = schemas.path("PaymentInstructionResponse");
+
+        assertThat(request.path("description").asText()).isEqualTo("Request to create a payment instruction.");
+        assertThat(request.path("properties")
+                        .path("idempotencyKey")
+                        .path("example")
+                        .asText())
+                .isEqualTo("payment-20260831-0001");
+        var requiredProperties = java.util.stream.StreamSupport.stream(
+                        request.path("required").spliterator(), false)
+                .map(JsonNode::asText)
+                .toList();
+        assertThat(requiredProperties)
+                .containsExactlyInAnyOrder("amount", "correlationId", "currency", "idempotencyKey");
+        assertThat(request.path("properties").path("currency").path("pattern").asText())
+                .isEqualTo("[A-Za-z]{3}");
+        assertThat(failureRequest.path("description").asText())
+                .isEqualTo("Request to record why a payment instruction failed.");
+        assertThat(failureRequest
+                        .path("properties")
+                        .path("reason")
+                        .path("example")
+                        .asText())
+                .isEqualTo("Provider rejected payment.");
+        assertThat(resource.path("description").asText())
+                .isEqualTo("Payment instruction resource returned by the internal payment API.");
+        assertThat(resource.path("properties")
+                        .path("instructionId")
+                        .path("format")
+                        .asText())
+                .isEqualTo("uuid");
+        var statuses = java.util.stream.StreamSupport.stream(
+                        resource.path("properties").path("status").path("enum").spliterator(), false)
+                .map(JsonNode::asText)
+                .toList();
+        assertThat(statuses).containsExactlyInAnyOrder("PENDING", "COMPLETED", "FAILED");
+    }
+
     private String createInstruction(String idempotencyKey) throws Exception {
         var response = sendJson("POST", "/internal/v1/payment-instructions", """
                 {
@@ -393,6 +521,20 @@ class PaymentInstructionApiIT {
 
         assertThat(response.statusCode()).isEqualTo(201);
         return read(response.body()).path("instructionId").asText();
+    }
+
+    private static void assertResponseContract(
+            com.fasterxml.jackson.databind.JsonNode operation, Set<String> expectedResponseCodes) {
+        var responses = operation.path("responses");
+        assertThat(responses.fieldNames()).toIterable().containsExactlyInAnyOrderElementsOf(expectedResponseCodes);
+        expectedResponseCodes.stream().filter(code -> !code.startsWith("2")).forEach(code -> assertThat(
+                        responses.path(code).path("content").has("application/problem+json"))
+                .as("response %s should document Problem Details", code)
+                .isTrue());
+        expectedResponseCodes.stream().filter(code -> code.startsWith("2")).forEach(code -> assertThat(
+                        responses.path(code).path("content").has("application/json"))
+                .as("response %s should document JSON", code)
+                .isTrue());
     }
 
     private HttpResponse<String> send(String method, String path) throws Exception {
