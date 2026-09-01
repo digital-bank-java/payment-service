@@ -4,6 +4,7 @@ import com.digitalbank.paymentservice.application.port.in.CompletePaymentInstruc
 import com.digitalbank.paymentservice.application.port.in.CreatePaymentInstructionCommand;
 import com.digitalbank.paymentservice.application.port.in.CreatePaymentInstructionInputPort;
 import com.digitalbank.paymentservice.application.port.in.FailPaymentInstructionInputPort;
+import com.digitalbank.paymentservice.application.port.in.GetPaymentInstructionInputPort;
 import com.digitalbank.paymentservice.application.port.in.PaymentInstructionResult;
 import com.digitalbank.paymentservice.application.port.out.PaymentInstructionRepository;
 import com.digitalbank.paymentservice.domain.exception.PaymentInstructionIdempotencyConflictException;
@@ -17,6 +18,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class PaymentInstructionService
         implements CreatePaymentInstructionInputPort,
+                GetPaymentInstructionInputPort,
                 CompletePaymentInstructionInputPort,
                 FailPaymentInstructionInputPort {
 
@@ -47,20 +49,23 @@ public class PaymentInstructionService
     }
 
     @Override
+    public PaymentInstructionResult get(PaymentInstructionId instructionId) {
+        Objects.requireNonNull(instructionId, "Payment instruction id is required");
+        return repository
+                .findById(instructionId)
+                .map(instruction -> PaymentInstructionResult.from(instruction, false))
+                .orElseThrow(() -> new PaymentInstructionNotFoundException(instructionId));
+    }
+
+    @Override
     public PaymentInstructionResult complete(PaymentInstructionId instructionId) {
-        var instruction = find(instructionId);
-        return PaymentInstructionResult.from(repository.save(instruction.complete(clock.instant())), false);
+        return PaymentInstructionResult.from(
+                repository.transition(instructionId, instruction -> instruction.complete(clock.instant())), false);
     }
 
     @Override
     public PaymentInstructionResult fail(PaymentInstructionId instructionId, String reason) {
-        var instruction = find(instructionId);
-        return PaymentInstructionResult.from(repository.save(instruction.fail(reason, clock.instant())), false);
-    }
-
-    private PaymentInstruction find(PaymentInstructionId instructionId) {
-        return repository
-                .findById(instructionId)
-                .orElseThrow(() -> new PaymentInstructionNotFoundException(instructionId));
+        return PaymentInstructionResult.from(
+                repository.transition(instructionId, instruction -> instruction.fail(reason, clock.instant())), false);
     }
 }
