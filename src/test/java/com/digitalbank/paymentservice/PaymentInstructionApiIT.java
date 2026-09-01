@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.digitalbank.paymentservice.application.port.in.CreatePaymentInstructionCommand;
 import com.digitalbank.paymentservice.application.port.out.PaymentInstructionRepository;
 import com.digitalbank.paymentservice.application.service.PaymentInstructionService;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.net.URI;
@@ -458,6 +459,52 @@ class PaymentInstructionApiIT {
                         .path("type")
                         .asText())
                 .isEqualTo("string");
+    }
+
+    @Test
+    void documentsPaymentInstructionRequestAndResponseSchemas() throws Exception {
+        var response = send("GET", "/v3/api-docs");
+
+        assertThat(response.statusCode()).isEqualTo(200);
+        var schemas = read(response.body()).path("components").path("schemas");
+        var request = schemas.path("CreatePaymentInstructionRequest");
+        var failureRequest = schemas.path("FailPaymentInstructionRequest");
+        var resource = schemas.path("PaymentInstructionResponse");
+
+        assertThat(request.path("description").asText()).isEqualTo("Request to create a payment instruction.");
+        assertThat(request.path("properties")
+                        .path("idempotencyKey")
+                        .path("example")
+                        .asText())
+                .isEqualTo("payment-20260831-0001");
+        var requiredProperties = java.util.stream.StreamSupport.stream(
+                        request.path("required").spliterator(), false)
+                .map(JsonNode::asText)
+                .toList();
+        assertThat(requiredProperties)
+                .containsExactlyInAnyOrder("amount", "correlationId", "currency", "idempotencyKey");
+        assertThat(request.path("properties").path("currency").path("pattern").asText())
+                .isEqualTo("[A-Za-z]{3}");
+        assertThat(failureRequest.path("description").asText())
+                .isEqualTo("Request to record why a payment instruction failed.");
+        assertThat(failureRequest
+                        .path("properties")
+                        .path("reason")
+                        .path("example")
+                        .asText())
+                .isEqualTo("Provider rejected payment.");
+        assertThat(resource.path("description").asText())
+                .isEqualTo("Payment instruction resource returned by the internal payment API.");
+        assertThat(resource.path("properties")
+                        .path("instructionId")
+                        .path("format")
+                        .asText())
+                .isEqualTo("uuid");
+        var statuses = java.util.stream.StreamSupport.stream(
+                        resource.path("properties").path("status").path("enum").spliterator(), false)
+                .map(JsonNode::asText)
+                .toList();
+        assertThat(statuses).containsExactlyInAnyOrder("PENDING", "COMPLETED", "FAILED");
     }
 
     private String createInstruction(String idempotencyKey) throws Exception {
