@@ -1,6 +1,6 @@
 # Payment Service
 
-Payment Service is the Digital Bank Java platform foundation for future payment rail workflows. This repository currently contains only a deployable Spring Boot baseline; payment business logic, Kafka behavior, and public routes are intentionally out of scope.
+Payment Service is the Digital Bank Java platform foundation for future payment rail workflows. This repository contains a deployable Spring Boot service plus an authenticated internal payment instruction lifecycle API; payment rail business logic, Kafka behavior, and public gateway routes remain intentionally out of scope.
 
 ## Implemented State
 
@@ -10,12 +10,33 @@ Payment Service is the Digital Bank Java platform foundation for future payment 
 - Explicit internal OpenAPI metadata at `/v3/api-docs`.
 - Non-root container image and hardened Helm deployment.
 - Default SIT service port `8085`.
+- Internal payment instruction lifecycle endpoints at `/internal/v1/payment-instructions`.
 
 ## Boundaries
 
-This service will later own payment workflow coordination and payment rail integration boundaries. It does not currently own customer data, account balances, ledger postings, transfer saga orchestration, Kafka topics, persistence, or secrets.
+This service will later own payment workflow coordination and payment rail integration boundaries. It does not currently own customer data, account balances, ledger postings, transfer saga orchestration, Kafka topics, or provider credentials.
 
 Payment rail integrations must remain behind outbound ports and adapters when that work is approved and tracked. Do not add provider credentials or payment data to this repository.
+
+## Payment Instruction Lifecycle API
+
+The application exposes an internal HTTP adapter over the transport-neutral payment instruction lifecycle boundary. A payment instruction is accepted as `PENDING` and can move once to either `COMPLETED` or `FAILED`; repeating the same create request returns the original instruction as an idempotent replay, repeating the same terminal outcome is idempotent, and changing a terminal outcome is rejected.
+
+The application boundary also normalizes the idempotency key, amount, currency, and description before comparing retries. An equivalent retry returns the original instruction identity, while reuse of the same idempotency key with a different business request is rejected. Correlation IDs are retained for tracing and are deliberately excluded from the idempotency comparison, so a retried request may have a new trace context.
+
+Payment instructions are stored in PostgreSQL through a Flyway-managed schema. Idempotency keys are unique in the database, so equivalent retries converge across replicas and restarts; the canonical request fields are compared before a replay is returned, and a changed payload returns `409 Conflict`. Payment-provider adapters, Kafka publication, and transaction saga orchestration are intentionally deferred to their planned stories.
+
+All payment instruction endpoints require a bearer JWT with the `payment.internal` scope. Missing or invalid authentication returns `401 Unauthorized`; an authenticated caller without that scope returns `403 Forbidden`. Both responses use `application/problem+json`. Health, service metadata, and the generated OpenAPI document remain public.
+
+### Endpoints
+
+- `POST /internal/v1/payment-instructions` creates a payment instruction and returns `201 Created` with `Location: /internal/v1/payment-instructions/{instructionId}`.
+- Repeating an equivalent create request returns `200 OK` with `Idempotent-Replay: true`.
+- `GET /internal/v1/payment-instructions/{instructionId}` retrieves the stable payment instruction representation, or returns `404 Not Found` when the instruction does not exist.
+- `POST /internal/v1/payment-instructions/{instructionId}/completion` completes a payment instruction.
+- `POST /internal/v1/payment-instructions/{instructionId}/failure` fails a payment instruction with a required JSON body containing `reason`.
+
+Error responses use `application/problem+json` for boundary validation failures, including malformed instruction ids, unknown instruction ids, conflicting create-time idempotency keys, invalid lifecycle transitions, and security failures. The generated internal contract is available at `/v3/api-docs`.
 
 ## Runtime Configuration
 
@@ -26,6 +47,11 @@ Config Server supplies the effective runtime configuration. The service reposito
 | `CONFIG_SERVER_URL` | Config Server base URL | `http://localhost:8888` |
 | `SPRING_PROFILES_ACTIVE` | Runtime environment profile | Spring `default` profile |
 | `SERVER_PORT` | HTTP listen port | `8085` |
+| `spring.datasource.url` | PostgreSQL JDBC URL | Required from Config Server |
+| `spring.datasource.username` | PostgreSQL username | Required from Config Server |
+| `spring.datasource.password` | PostgreSQL password | Required from Config Server |
+| `spring.security.oauth2.resourceserver.jwt.issuer-uri` | JWT issuer URI | Required from Config Server |
+| `spring.security.oauth2.resourceserver.jwt.jwk-set-uri` | JWT JWK set URI | Optional when issuer discovery is available |
 
 The application fallback port is `8085`, and the Helm chart sets `SERVER_PORT` from `service.port` so the process, probes, and Service remain aligned even before a service-specific Config Repo entry is added.
 
@@ -63,7 +89,7 @@ Run integration tests and package verification:
 ./mvnw --batch-mode --no-transfer-progress verify -DskipUnitTests=true
 ```
 
-The integration test disables Config Client and validates health plus the OpenAPI title and contract version using a random application port.
+Socket-level integration tests disable Config Client, start PostgreSQL with Testcontainers, and validate health, OpenAPI metadata, authenticated payment instruction HTTP behavior, duplicate/replay/conflict handling, and concurrent retries using a random application port. Focused controller tests use in-process `MockMvc` to cover request binding and Problem Details mapping.
 
 ## Run With Docker
 
@@ -122,13 +148,17 @@ In another terminal:
 ```bash
 curl --fail http://localhost:18085/actuator/health
 curl --fail http://localhost:18085/v3/api-docs
+curl --fail -X POST http://localhost:18085/internal/v1/payment-instructions \
+  -H "Authorization: Bearer $PAYMENT_INTERNAL_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"idempotencyKey":"payment-001","correlationId":"trace-001","amount":25.00,"currency":"USD","description":"Utility bill payment"}'
 ```
 
-Normal platform access should later flow through the API Gateway. No payment business route is exposed by this bootstrap.
+Normal platform access should later flow through the API Gateway. The current HTTP surface is internal-only; payment-provider integrations and external routing are still out of scope for this repository.
 
 ## CI
 
-The GitHub Actions workflow runs Maven verification and Helm validation. A container job then builds the image, verifies the non-root user, and smoke-tests health against a disposable mock Config Server. Third-party actions are pinned to immutable commit SHAs.
+The GitHub Actions workflow runs Maven verification and Helm validation. A container job then builds the image, verifies the non-root user, starts disposable PostgreSQL and Config Server fixtures, and smoke-tests health. Third-party actions are pinned to immutable commit SHAs.
 
 ## Workstation Debugging Against SIT
 
