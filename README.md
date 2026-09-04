@@ -47,13 +47,13 @@ Config Server supplies the effective runtime configuration. The service reposito
 | `CONFIG_SERVER_URL` | Config Server base URL | `http://localhost:8888` |
 | `SPRING_PROFILES_ACTIVE` | Runtime environment profile | Spring `default` profile |
 | `SERVER_PORT` | HTTP listen port | `8085` |
-| `spring.datasource.url` | PostgreSQL JDBC URL | Required from Config Server |
-| `spring.datasource.username` | PostgreSQL username | Required from Config Server |
-| `spring.datasource.password` | PostgreSQL password | Required from Config Server |
+| `spring.datasource.url` | PostgreSQL JDBC URL | Required from Config Server or Helm deployment values |
+| `spring.datasource.username` | PostgreSQL username | Required from Config Server or the referenced Kubernetes Secret |
+| `spring.datasource.password` | PostgreSQL password | Required from Config Server or the referenced Kubernetes Secret |
 | `spring.security.oauth2.resourceserver.jwt.issuer-uri` | JWT issuer URI | Required from Config Server |
 | `spring.security.oauth2.resourceserver.jwt.jwk-set-uri` | JWT JWK set URI | Optional when issuer discovery is available |
 
-The application fallback port is `8085`, and the Helm chart sets `SERVER_PORT` from `service.port` so the process, probes, and Service remain aligned even before a service-specific Config Repo entry is added.
+The application fallback port is `8085`, and the Helm chart sets `SERVER_PORT` from `service.port` so the process, probes, and Service remain aligned even before a service-specific Config Repo entry is added. The SIT chart injects the `payment_service` JDBC URL and reads PostgreSQL credentials from the existing `postgres` Secret (`POSTGRES_USER` and `POSTGRES_PASSWORD`). Credentials remain outside Git.
 
 The formal environments are `sit`, `uat`, and `prod`. `sit` runs on local Docker Desktop Kubernetes; `uat` and `prod` are future AWS environments. `local` is not an active environment or Spring profile. Workstation debugging uses the `sit` profile with temporary overrides against forwarded SIT dependencies.
 
@@ -96,7 +96,7 @@ Socket-level integration tests disable Config Client, start PostgreSQL with Test
 Build the image:
 
 ```bash
-docker build -t digital-bank-java/payment-service:0.0.1 .
+docker build -t digital-bank-java/payment-service:0.0.2 .
 ```
 
 Run it against a reachable Config Server:
@@ -107,7 +107,7 @@ docker run --rm \
   --publish 8085:8085 \
   --env CONFIG_SERVER_URL=http://host.docker.internal:8888 \
   --env SPRING_PROFILES_ACTIVE=sit \
-  digital-bank-java/payment-service:0.0.1
+digital-bank-java/payment-service:0.0.2
 ```
 
 The image runs as numeric non-root user and group `10001:10001` and uses `/tmp` for writable temporary files.
@@ -122,7 +122,7 @@ helm lint helm --strict --values helm/values-sit.yaml
 helm template payment-service helm \
   --namespace digital-bank-sit \
   --values helm/values-sit.yaml \
-  --set image.tag="0.0.1" \
+  --set image.tag="0.0.2" \
   | kubectl apply --dry-run=client -f -
 
 helm upgrade --install payment-service helm \

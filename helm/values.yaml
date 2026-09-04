@@ -12,6 +12,14 @@ runtime:
   profile: default
   configServerUrl: http://config-server:8888
 
+database:
+  host: postgres
+  port: 5432
+  name: payment_service
+  secretName: postgres
+  usernameKey: POSTGRES_USER
+  passwordKey: POSTGRES_PASSWORD
+
 service:
   type: ClusterIP
   port: 8085
