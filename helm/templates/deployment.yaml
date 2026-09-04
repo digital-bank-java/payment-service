@@ -49,6 +49,13 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.database.secretName | quote }}
                   key: {{ .Values.database.passwordKey | quote }}
+            {{- if .Values.auth.enabled }}
+            - name: AUTH_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.secretName | quote }}
+                  key: {{ .Values.auth.secretKey | quote }}
+            {{- end }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           ports:

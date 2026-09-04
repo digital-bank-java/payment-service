@@ -5,7 +5,7 @@ revisionHistoryLimit: 3
 
 image:
   repository: digital-bank-java/payment-service
-  tag: "0.0.1"
+  tag: "0.0.2"
   pullPolicy: IfNotPresent
 
 runtime:
@@ -19,6 +19,11 @@ database:
   secretName: postgres
   usernameKey: POSTGRES_USER
   passwordKey: POSTGRES_PASSWORD
+
+auth:
+  enabled: false
+  secretName: auth-service-secrets
+  secretKey: jwt-secret
 
 service:
   type: ClusterIP
