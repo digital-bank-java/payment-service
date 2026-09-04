@@ -1,3 +1,6 @@
 runtime:
   profile: sit
   configServerUrl: http://config-server:8888
+
+auth:
+  enabled: true

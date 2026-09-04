@@ -5,12 +5,17 @@ revisionHistoryLimit: 3
 
 image:
   repository: digital-bank-java/payment-service
-  tag: "0.0.1"
+  tag: "0.0.2"
   pullPolicy: IfNotPresent
 
 runtime:
   profile: default
   configServerUrl: http://config-server:8888
+
+auth:
+  enabled: false
+  secretName: auth-service-secrets
+  secretKey: jwt-secret
 
 service:
   type: ClusterIP
