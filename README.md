@@ -47,15 +47,15 @@ Config Server supplies the effective runtime configuration. The service reposito
 | `CONFIG_SERVER_URL` | Config Server base URL | `http://localhost:8888` |
 | `SPRING_PROFILES_ACTIVE` | Runtime environment profile | Spring `default` profile |
 | `SERVER_PORT` | HTTP listen port | `8085` |
-| `spring.datasource.url` | PostgreSQL JDBC URL | Required from Config Server |
-| `spring.datasource.username` | PostgreSQL username | Required from Config Server |
-| `spring.datasource.password` | PostgreSQL password | Required from Config Server |
+| `spring.datasource.url` | PostgreSQL JDBC URL | Required from Config Server or Helm deployment values |
+| `spring.datasource.username` | PostgreSQL username | Required from Config Server or the referenced Kubernetes Secret |
+| `spring.datasource.password` | PostgreSQL password | Required from Config Server or the referenced Kubernetes Secret |
 | `spring.security.oauth2.resourceserver.jwt.issuer-uri` | OIDC issuer URI | Optional when using the SIT HMAC contract |
 | `spring.security.oauth2.resourceserver.jwt.jwk-set-uri` | JWT JWK set URI | Optional when issuer discovery is available |
 | `auth.jwt.secret` | Base64 HMAC secret shared with Auth Service in SIT | none |
 | `auth.jwt.issuer` | HMAC token issuer used in SIT | none |
 
-The application fallback port is `8085`, and the Helm chart sets `SERVER_PORT` from `service.port` so the process, probes, and Service remain aligned even before a service-specific Config Repo entry is added.
+The application fallback port is `8085`, and the Helm chart sets `SERVER_PORT` from `service.port` so the process, probes, and Service remain aligned even before a service-specific Config Repo entry is added. The SIT chart injects the `payment_service` JDBC URL and reads PostgreSQL credentials from the existing `postgres` Secret (`POSTGRES_USER` and `POSTGRES_PASSWORD`). Credentials remain outside Git.
 
 When `spring.security.oauth2.resourceserver.jwt.issuer-uri` is configured, Payment Service uses OIDC discovery or the explicit JWK set. In local SIT, it instead uses `auth.jwt.secret` and `auth.jwt.issuer` to validate the shared Auth Service HMAC token. HMAC mode requires a base64 secret decoding to at least 32 bytes; JWK material alone is not treated as sufficient trust configuration.
 
