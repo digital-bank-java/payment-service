@@ -179,3 +179,8 @@ git diff --check
 ```
 
 All changes require review by the CODEOWNERS maintainer. Never commit credentials, tokens, customer information, payment data, or production endpoints.
+
+## Operational Logging
+
+The service emits one-line ECS JSON console events and propagates the bounded
+`X-Correlation-ID` boundary defined in the organization [structured logging and redaction contract](https://github.com/digital-bank-java/.github/blob/main/docs/structured-logging-and-redaction.md). Request bodies, credentials, tokens, payment data, and customer data are not logged.
