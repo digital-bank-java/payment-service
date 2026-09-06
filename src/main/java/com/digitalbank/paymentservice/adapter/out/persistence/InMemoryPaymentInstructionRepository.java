@@ -2,6 +2,7 @@ package com.digitalbank.paymentservice.adapter.out.persistence;
 
 import com.digitalbank.paymentservice.application.port.out.PaymentInstructionRepository;
 import com.digitalbank.paymentservice.application.port.out.PaymentInstructionSaveResult;
+import com.digitalbank.paymentservice.application.port.out.PaymentInstructionTransitionResult;
 import com.digitalbank.paymentservice.domain.exception.PaymentInstructionNotFoundException;
 import com.digitalbank.paymentservice.domain.model.PaymentInstruction;
 import com.digitalbank.paymentservice.domain.model.PaymentInstructionId;
@@ -38,14 +39,20 @@ public class InMemoryPaymentInstructionRepository implements PaymentInstructionR
     }
 
     @Override
-    public PaymentInstruction transition(
+    public PaymentInstructionTransitionResult transition(
             PaymentInstructionId instructionId, UnaryOperator<PaymentInstruction> transition) {
-        var updated = instructions.compute(instructionId, (ignored, current) -> {
-            if (current == null) {
+        var current = instructions.get(instructionId);
+        if (current == null) {
+            throw new PaymentInstructionNotFoundException(instructionId);
+        }
+        var updated = instructions.compute(instructionId, (ignored, existing) -> {
+            if (existing == null) {
                 return null;
             }
-            return transition.apply(current);
+            return transition.apply(existing);
         });
-        return Optional.ofNullable(updated).orElseThrow(() -> new PaymentInstructionNotFoundException(instructionId));
+        return new PaymentInstructionTransitionResult(
+                Optional.ofNullable(updated).orElseThrow(() -> new PaymentInstructionNotFoundException(instructionId)),
+                !updated.equals(current));
     }
 }

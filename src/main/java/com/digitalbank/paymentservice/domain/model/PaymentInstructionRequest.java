@@ -13,6 +13,9 @@ public record PaymentInstructionRequest(String idempotencyKey, BigDecimal amount
             throw new IllegalArgumentException("Payment amount must be positive");
         }
         amount = amount.stripTrailingZeros();
+        if (amount.scale() > 4) {
+            throw new IllegalArgumentException("Payment amount must have no more than four decimal places");
+        }
         currency = requireText(currency, "Payment currency is required").toUpperCase(Locale.ROOT);
         if (!currency.matches("[A-Z]{3}")) {
             throw new IllegalArgumentException("Payment currency must be a three-letter code");

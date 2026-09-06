@@ -45,6 +45,7 @@ public record PaymentInstruction(
             return this;
         }
         requirePending();
+        reason = requireFailureReason(reason);
         return new PaymentInstruction(
                 id, request, correlationId, PaymentInstructionStatus.FAILED, reason, createdAt, now);
     }
@@ -60,5 +61,13 @@ public record PaymentInstruction(
             throw new IllegalArgumentException(message);
         }
         return value.trim();
+    }
+
+    private static String requireFailureReason(String value) {
+        var reason = requireText(value, "Failure reason is required");
+        if (reason.length() > 500) {
+            throw new IllegalArgumentException("Failure reason must be at most 500 characters");
+        }
+        return reason;
     }
 }

@@ -8,7 +8,8 @@
 
 - Owns service bootstrap, Config Client, health probes, OpenAPI metadata, packaging, and deployment.
 - Owns the transport-neutral payment instruction lifecycle foundation and its idempotency/correlation boundary.
-- Does not own customer data, account balances, ledger postings, transfer saga orchestration, Kafka behavior, persistence, or secrets.
+- Owns durable payment instruction persistence, the transactional payment state outbox, and bounded Kafka publication.
+- Does not own customer data, account balances, ledger postings, transfer saga orchestration, provider integrations, or secrets.
 - Do not add public payment routes without a supporting issue and API contract work.
 
 ## Commands
@@ -32,7 +33,7 @@ helm lint helm --strict --values helm/values-sit.yaml
 
 Use unit tests for isolated application/domain behavior when those layers exist. Use integration tests for HTTP and infrastructure-backed behavior. Keep `./mvnw verify` green before merge.
 
-The payment instruction foundation currently uses an in-memory output adapter for lifecycle tests. Do not mistake it for production persistence; durable payment state and external payment-provider integration require separately tracked work.
+The payment instruction lifecycle uses PostgreSQL in production and an in-memory adapter in unit tests. The transactional state outbox and Kafka publisher are part of the current payment instruction event slice; external payment-provider integration requires separately tracked work.
 
 ## Architecture
 

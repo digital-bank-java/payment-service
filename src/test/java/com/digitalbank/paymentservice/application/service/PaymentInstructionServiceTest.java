@@ -6,15 +6,21 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.digitalbank.paymentservice.adapter.out.persistence.InMemoryPaymentInstructionRepository;
 import com.digitalbank.paymentservice.application.port.in.CreatePaymentInstructionCommand;
 import com.digitalbank.paymentservice.application.port.in.PaymentInstructionResult;
+import com.digitalbank.paymentservice.application.port.out.PaymentInstructionOutbox;
+import com.digitalbank.paymentservice.application.port.out.PaymentInstructionStateEvent;
+import com.digitalbank.paymentservice.application.port.out.PaymentInstructionTransitionResult;
 import com.digitalbank.paymentservice.domain.exception.PaymentInstructionIdempotencyConflictException;
 import com.digitalbank.paymentservice.domain.exception.PaymentInstructionNotFoundException;
 import com.digitalbank.paymentservice.domain.model.PaymentInstructionId;
 import com.digitalbank.paymentservice.domain.model.PaymentInstructionStatus;
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
@@ -29,8 +35,61 @@ class PaymentInstructionServiceTest {
 
     private static final Instant NOW = Instant.parse("2026-08-30T10:15:30Z");
 
-    private final PaymentInstructionService service =
-            new PaymentInstructionService(new InMemoryPaymentInstructionRepository(), Clock.fixed(NOW, ZoneOffset.UTC));
+    private final CapturingOutbox outbox = new CapturingOutbox();
+    private final PaymentInstructionStateEventFactory eventFactory = new PaymentInstructionStateEventFactory(
+            new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules());
+    private final PaymentInstructionService service = new PaymentInstructionService(
+            new InMemoryPaymentInstructionRepository(), Clock.fixed(NOW, ZoneOffset.UTC), outbox, eventFactory);
+
+    @Test
+    void creationWritesOnePendingStateEventWithGovernedMetadata() {
+        var result = service.register(command("payment-event-001", "AED", "125.50"));
+
+        assertThat(outbox.events()).singleElement().satisfies(event -> {
+            assertThat(event.eventId()).isNotNull();
+            assertThat(event.eventType()).isEqualTo("PaymentInstructionStateChanged.v1");
+            assertThat(event.schemaVersion()).isEqualTo("1.0.0");
+            assertThat(event.producer()).isEqualTo("payment-service");
+            assertThat(event.occurredAt()).isEqualTo(NOW);
+            assertThat(event.aggregateId())
+                    .isEqualTo(result.instructionId().value().toString());
+            assertThat(event.instructionId())
+                    .isEqualTo(result.instructionId().value().toString());
+            assertThat(event.correlationId()).isEqualTo("correlation-001");
+            assertThat(event.causationId()).isEqualTo("payment-event-001");
+            assertThat(event.idempotencyKey()).isEqualTo("payment-event-001");
+            assertThat(event.amount()).isEqualTo("125.5");
+            assertThat(event.currency()).isEqualTo("AED");
+            assertThat(event.status()).isEqualTo("PENDING");
+            assertThat(event.failureReason()).isNull();
+            assertThat(event.payload())
+                    .contains(
+                            "PaymentInstructionStateChanged.v1",
+                            result.instructionId().value().toString());
+        });
+    }
+
+    @Test
+    void terminalTransitionWritesOneTerminalStateEventAndReplayDoesNotDuplicateIt() {
+        var created = service.register(command("payment-event-002", "USD", "10.00"));
+
+        service.complete(created.instructionId());
+        service.complete(created.instructionId());
+
+        assertThat(outbox.events())
+                .extracting(PaymentInstructionStateEvent::status)
+                .containsExactly("PENDING", "COMPLETED");
+        assertThat(outbox.events().get(1).causationId())
+                .isEqualTo(created.instructionId().value() + ":COMPLETED");
+    }
+
+    @Test
+    void equivalentCreateReplayDoesNotWriteAnotherStateEvent() {
+        service.register(command("payment-event-003", "USD", "10.00"));
+        service.register(command("payment-event-003", "USD", "10.00"));
+
+        assertThat(outbox.events()).hasSize(1);
+    }
 
     @Test
     void repeatedEquivalentRequestReturnsOriginalInstructionAsReplay() {
@@ -131,7 +190,8 @@ class PaymentInstructionServiceTest {
     @Test
     void concurrentCompletionAndFailureAllowOnlyOneTerminalTransition() throws Exception {
         var repository = new CoordinatedTransitionRepository();
-        var racingService = new PaymentInstructionService(repository, Clock.fixed(NOW, ZoneOffset.UTC));
+        var racingService =
+                new PaymentInstructionService(repository, Clock.fixed(NOW, ZoneOffset.UTC), outbox, eventFactory);
         var created = racingService.register(command("payment-race", "USD", "10.00"));
         repository.coordinate(created.instructionId());
         var barrier = new CyclicBarrier(2);
@@ -194,6 +254,39 @@ class PaymentInstructionServiceTest {
                 key, "correlation-001", new BigDecimal(amount), currency, "customer payment");
     }
 
+    private static final class CapturingOutbox implements PaymentInstructionOutbox {
+
+        private final List<PaymentInstructionStateEvent> events = new ArrayList<>();
+
+        @Override
+        public synchronized void save(PaymentInstructionStateEvent event) {
+            events.add(event);
+        }
+
+        @Override
+        public List<com.digitalbank.paymentservice.application.port.out.PaymentInstructionOutboxRecord> claimBatch(
+                Instant now, int batchSize, Duration lease) {
+            return List.of();
+        }
+
+        @Override
+        public void markPublished(UUID eventId, UUID claimId, Instant publishedAt) {}
+
+        @Override
+        public void markFailedOrRetry(
+                UUID eventId,
+                UUID claimId,
+                int attempts,
+                int maxAttempts,
+                Instant now,
+                Duration retryBackoff,
+                String error) {}
+
+        synchronized List<PaymentInstructionStateEvent> events() {
+            return List.copyOf(events);
+        }
+    }
+
     private static final class CoordinatedTransitionRepository extends InMemoryPaymentInstructionRepository {
 
         private volatile PaymentInstructionId coordinatedInstructionId;
@@ -220,7 +313,7 @@ class PaymentInstructionServiceTest {
         }
 
         @Override
-        public com.digitalbank.paymentservice.domain.model.PaymentInstruction transition(
+        public PaymentInstructionTransitionResult transition(
                 PaymentInstructionId instructionId,
                 java.util.function.UnaryOperator<com.digitalbank.paymentservice.domain.model.PaymentInstruction>
                         transition) {

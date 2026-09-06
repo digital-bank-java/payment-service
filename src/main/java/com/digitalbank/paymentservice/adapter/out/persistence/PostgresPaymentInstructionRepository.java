@@ -2,6 +2,7 @@ package com.digitalbank.paymentservice.adapter.out.persistence;
 
 import com.digitalbank.paymentservice.application.port.out.PaymentInstructionRepository;
 import com.digitalbank.paymentservice.application.port.out.PaymentInstructionSaveResult;
+import com.digitalbank.paymentservice.application.port.out.PaymentInstructionTransitionResult;
 import com.digitalbank.paymentservice.domain.exception.PaymentInstructionNotFoundException;
 import com.digitalbank.paymentservice.domain.model.PaymentInstruction;
 import com.digitalbank.paymentservice.domain.model.PaymentInstructionId;
@@ -97,7 +98,7 @@ class PostgresPaymentInstructionRepository implements PaymentInstructionReposito
 
     @Override
     @Transactional
-    public PaymentInstruction transition(
+    public PaymentInstructionTransitionResult transition(
             PaymentInstructionId instructionId, UnaryOperator<PaymentInstruction> transition) {
         var current = queryOne(
                         "select " + SELECT_COLUMNS + " from payment_instructions where id = ? for update",
@@ -105,7 +106,7 @@ class PostgresPaymentInstructionRepository implements PaymentInstructionReposito
                 .orElseThrow(() -> new PaymentInstructionNotFoundException(instructionId));
         var updated = transition.apply(current);
         if (updated.equals(current)) {
-            return current;
+            return new PaymentInstructionTransitionResult(current, false);
         }
 
         jdbcTemplate.update(
@@ -118,7 +119,7 @@ class PostgresPaymentInstructionRepository implements PaymentInstructionReposito
                 updated.failureReason(),
                 Timestamp.from(updated.updatedAt()),
                 instructionId.value());
-        return updated;
+        return new PaymentInstructionTransitionResult(updated, true);
     }
 
     private Optional<PaymentInstruction> findByIdempotencyKey(String idempotencyKey) {

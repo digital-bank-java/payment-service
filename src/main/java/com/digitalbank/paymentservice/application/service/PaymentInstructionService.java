@@ -6,6 +6,7 @@ import com.digitalbank.paymentservice.application.port.in.CreatePaymentInstructi
 import com.digitalbank.paymentservice.application.port.in.FailPaymentInstructionInputPort;
 import com.digitalbank.paymentservice.application.port.in.GetPaymentInstructionInputPort;
 import com.digitalbank.paymentservice.application.port.in.PaymentInstructionResult;
+import com.digitalbank.paymentservice.application.port.out.PaymentInstructionOutbox;
 import com.digitalbank.paymentservice.application.port.out.PaymentInstructionRepository;
 import com.digitalbank.paymentservice.domain.exception.PaymentInstructionIdempotencyConflictException;
 import com.digitalbank.paymentservice.domain.exception.PaymentInstructionNotFoundException;
@@ -14,6 +15,7 @@ import com.digitalbank.paymentservice.domain.model.PaymentInstructionId;
 import java.time.Clock;
 import java.util.Objects;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class PaymentInstructionService
@@ -23,14 +25,23 @@ public class PaymentInstructionService
                 FailPaymentInstructionInputPort {
 
     private final PaymentInstructionRepository repository;
+    private final PaymentInstructionOutbox outbox;
+    private final PaymentInstructionStateEventFactory eventFactory;
     private final Clock clock;
 
-    public PaymentInstructionService(PaymentInstructionRepository repository, Clock clock) {
+    public PaymentInstructionService(
+            PaymentInstructionRepository repository,
+            Clock clock,
+            PaymentInstructionOutbox outbox,
+            PaymentInstructionStateEventFactory eventFactory) {
         this.repository = Objects.requireNonNull(repository, "Payment instruction repository is required");
         this.clock = Objects.requireNonNull(clock, "Clock is required");
+        this.outbox = Objects.requireNonNull(outbox, "Payment instruction outbox is required");
+        this.eventFactory = Objects.requireNonNull(eventFactory, "Payment instruction state event factory is required");
     }
 
     @Override
+    @Transactional
     public PaymentInstructionResult register(CreatePaymentInstructionCommand command) {
         Objects.requireNonNull(command, "Payment instruction command is required");
         var request = command.request();
@@ -45,6 +56,7 @@ public class PaymentInstructionService
             return PaymentInstructionResult.from(saved.instruction(), true);
         }
 
+        outbox.save(eventFactory.create(saved.instruction()));
         return PaymentInstructionResult.from(saved.instruction(), false);
     }
 
@@ -58,14 +70,22 @@ public class PaymentInstructionService
     }
 
     @Override
+    @Transactional
     public PaymentInstructionResult complete(PaymentInstructionId instructionId) {
-        return PaymentInstructionResult.from(
-                repository.transition(instructionId, instruction -> instruction.complete(clock.instant())), false);
+        var transition = repository.transition(instructionId, instruction -> instruction.complete(clock.instant()));
+        if (transition.transitioned()) {
+            outbox.save(eventFactory.create(transition.instruction()));
+        }
+        return PaymentInstructionResult.from(transition.instruction(), false);
     }
 
     @Override
+    @Transactional
     public PaymentInstructionResult fail(PaymentInstructionId instructionId, String reason) {
-        return PaymentInstructionResult.from(
-                repository.transition(instructionId, instruction -> instruction.fail(reason, clock.instant())), false);
+        var transition = repository.transition(instructionId, instruction -> instruction.fail(reason, clock.instant()));
+        if (transition.transitioned()) {
+            outbox.save(eventFactory.create(transition.instruction()));
+        }
+        return PaymentInstructionResult.from(transition.instruction(), false);
     }
 }
