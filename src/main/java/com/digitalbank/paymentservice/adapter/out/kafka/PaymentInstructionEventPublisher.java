@@ -47,6 +47,18 @@ public class PaymentInstructionEventPublisher {
     }
 
     private void publish(PaymentInstructionOutboxRecord record) {
+        if (record.attempts() > properties.getMaxAttempts()) {
+            var event = record.event();
+            outbox.markFailedOrRetry(
+                    event.eventId(),
+                    record.claimId(),
+                    record.attempts(),
+                    properties.getMaxAttempts(),
+                    clock.instant(),
+                    properties.getRetryBackoff(),
+                    "Maximum payment event publication attempts exceeded");
+            return;
+        }
         try {
             var event = record.event();
             var kafkaRecord =
@@ -67,7 +79,7 @@ public class PaymentInstructionEventPublisher {
         outbox.markFailedOrRetry(
                 event.eventId(),
                 record.claimId(),
-                record.attempts() + 1,
+                record.attempts(),
                 properties.getMaxAttempts(),
                 clock.instant(),
                 properties.getRetryBackoff(),

@@ -125,7 +125,12 @@ class PaymentInstructionEventPublisherTest {
 
         @Override
         public List<PaymentInstructionOutboxRecord> claimBatch(Instant now, int batchSize, Duration lease) {
-            return claims < records.size() ? List.of(records.get(claims++)) : List.of();
+            if (claims >= records.size()) {
+                return List.of();
+            }
+            var record = records.get(claims++);
+            return List.of(new PaymentInstructionOutboxRecord(
+                    record.event(), record.attempts() + 1, record.claimId(), record.claimUntil()));
         }
 
         @Override

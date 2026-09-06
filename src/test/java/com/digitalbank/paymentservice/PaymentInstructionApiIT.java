@@ -138,7 +138,7 @@ class PaymentInstructionApiIT {
                 .findFirst()
                 .orElseThrow();
 
-        assertThat(record.attempts()).isZero();
+        assertThat(record.attempts()).isOne();
         assertThat(record.claimId()).isNotNull();
         paymentInstructionOutbox.markPublished(record.event().eventId(), record.claimId(), Instant.now());
 
