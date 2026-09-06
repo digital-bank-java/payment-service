@@ -3,8 +3,10 @@ package com.digitalbank.paymentservice;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.digitalbank.paymentservice.application.port.in.CreatePaymentInstructionCommand;
+import com.digitalbank.paymentservice.application.port.out.PaymentInstructionOutbox;
 import com.digitalbank.paymentservice.application.port.out.PaymentInstructionRepository;
 import com.digitalbank.paymentservice.application.service.PaymentInstructionService;
+import com.digitalbank.paymentservice.application.service.PaymentInstructionStateEventFactory;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
@@ -13,6 +15,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -24,6 +28,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -48,6 +53,113 @@ class PaymentInstructionApiIT {
 
     @Autowired
     private PaymentInstructionRepository paymentInstructionRepository;
+
+    @Autowired
+    private PaymentInstructionOutbox paymentInstructionOutbox;
+
+    @Autowired
+    private PaymentInstructionStateEventFactory paymentInstructionStateEventFactory;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @Test
+    void persistsOnePendingOutboxEventWithTheInstructionPayload() {
+        var idempotencyKey = "payment-outbox-pending-" + UUID.randomUUID();
+        var result = paymentInstructionService.register(new CreatePaymentInstructionCommand(
+                idempotencyKey, "correlation-outbox-pending", new BigDecimal("125.50"), "aed", "Outbox payment"));
+
+        var rows = jdbcTemplate.queryForList(
+                "select event_id, event_type, correlation_id, causation_id, event_status, payload "
+                        + "from payment_instruction_outbox where instruction_id = ?",
+                result.instructionId().value());
+
+        assertThat(rows).singleElement().satisfies(row -> {
+            assertThat(row.get("event_id")).isNotNull();
+            assertThat(row.get("event_type")).isEqualTo("PaymentInstructionStateChanged.v1");
+            assertThat(row.get("correlation_id")).isEqualTo("correlation-outbox-pending");
+            assertThat(row.get("causation_id")).isEqualTo(idempotencyKey);
+            assertThat(row.get("event_status")).isEqualTo("PENDING");
+            assertThat(row.get("payload").toString())
+                    .contains(
+                            "PaymentInstructionStateChanged.v1",
+                            result.instructionId().value().toString());
+        });
+    }
+
+    @Test
+    void persistsExactlyOneEventForEachTerminalOutcome() {
+        var completed = paymentInstructionService.register(new CreatePaymentInstructionCommand(
+                "payment-outbox-completed-" + UUID.randomUUID(),
+                "correlation-outbox-completed",
+                new BigDecimal("10.00"),
+                "USD",
+                "Completed outbox payment"));
+        paymentInstructionService.complete(completed.instructionId());
+
+        var failed = paymentInstructionService.register(new CreatePaymentInstructionCommand(
+                "payment-outbox-failed-" + UUID.randomUUID(),
+                "correlation-outbox-failed",
+                new BigDecimal("20.00"),
+                "USD",
+                "Failed outbox payment"));
+        paymentInstructionService.fail(failed.instructionId(), "provider rejected payment");
+
+        assertThat(eventStatuses(completed.instructionId().value())).containsExactly("PENDING", "COMPLETED");
+        assertThat(eventStatuses(failed.instructionId().value())).containsExactly("PENDING", "FAILED");
+        var failedPayload = jdbcTemplate.queryForObject(
+                "select payload from payment_instruction_outbox where instruction_id = ? and event_status = 'FAILED'",
+                String.class,
+                failed.instructionId().value());
+        assertThat(read(failedPayload).path("status").asText()).isEqualTo("FAILED");
+        assertThat(read(failedPayload).path("failureReason").asText()).isEqualTo("provider rejected payment");
+        assertThat(jdbcTemplate.queryForObject(
+                        "select count(*) from payment_instruction_outbox where instruction_id = ? and event_status = 'FAILED'",
+                        Integer.class,
+                        failed.instructionId().value()))
+                .isEqualTo(1);
+    }
+
+    @Test
+    void claimsPendingEventAndRecordsPublication() {
+        var instruction = paymentInstructionService.register(new CreatePaymentInstructionCommand(
+                "payment-outbox-publication-" + UUID.randomUUID(),
+                "correlation-outbox-publication",
+                new BigDecimal("30.00"),
+                "USD",
+                "Publication tracking"));
+
+        var claimed = paymentInstructionOutbox.claimBatch(Instant.now(), 100, Duration.ofSeconds(30));
+        var record = claimed.stream()
+                .filter(candidate -> candidate
+                        .event()
+                        .instructionId()
+                        .equals(instruction.instructionId().value().toString()))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(record.attempts()).isZero();
+        assertThat(record.claimId()).isNotNull();
+        paymentInstructionOutbox.markPublished(record.event().eventId(), record.claimId(), Instant.now());
+
+        assertThat(jdbcTemplate.queryForMap(
+                        "select publication_status, attempt_count, claim_id "
+                                + "from payment_instruction_outbox where instruction_id = ?",
+                        instruction.instructionId().value()))
+                .containsEntry("publication_status", "PUBLISHED")
+                .containsEntry("attempt_count", 1)
+                .containsEntry("claim_id", null);
+    }
+
+    private List<String> eventStatuses(UUID instructionId) {
+        return jdbcTemplate
+                .queryForList(
+                        "select event_status from payment_instruction_outbox where instruction_id = ? order by created_at",
+                        String.class,
+                        instructionId)
+                .stream()
+                .toList();
+    }
 
     @Test
     void createsPaymentInstructionAndReplaysEquivalentRequest() throws Exception {
@@ -273,7 +385,11 @@ class PaymentInstructionApiIT {
                 key, "correlation-first", new BigDecimal("25.00"), "USD", "Durable payment");
 
         var first = paymentInstructionService.register(command);
-        var freshService = new PaymentInstructionService(paymentInstructionRepository, Clock.systemUTC());
+        var freshService = new PaymentInstructionService(
+                paymentInstructionRepository,
+                Clock.systemUTC(),
+                paymentInstructionOutbox,
+                paymentInstructionStateEventFactory);
         var replay = freshService.register(new CreatePaymentInstructionCommand(
                 key, "correlation-retry", new BigDecimal("25.0"), "usd", "Durable payment"));
 

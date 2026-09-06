@@ -1,6 +1,6 @@
 # Payment Service
 
-Payment Service is the Digital Bank Java platform foundation for future payment rail workflows. This repository contains a deployable Spring Boot service plus an authenticated internal payment instruction lifecycle API; payment rail business logic, Kafka behavior, and public gateway routes remain intentionally out of scope.
+Payment Service is the Digital Bank Java platform foundation for future payment rail workflows. This repository contains a deployable Spring Boot service, an authenticated internal payment instruction lifecycle API, and durable publication of governed payment instruction state events; payment rail business logic and public gateway routes remain intentionally out of scope.
 
 ## Implemented State
 
@@ -11,10 +11,11 @@ Payment Service is the Digital Bank Java platform foundation for future payment 
 - Non-root container image and hardened Helm deployment.
 - Default SIT service port `8085`.
 - Internal payment instruction lifecycle endpoints at `/internal/v1/payment-instructions`.
+- PostgreSQL-backed transactional outbox and bounded at-least-once Kafka publication for `payment.instruction.state.v1`.
 
 ## Boundaries
 
-This service will later own payment workflow coordination and payment rail integration boundaries. It does not currently own customer data, account balances, ledger postings, transfer saga orchestration, Kafka topics, or provider credentials.
+This service will later own payment workflow coordination and payment rail integration boundaries. It does not currently own customer data, account balances, ledger postings, transfer saga orchestration, or provider credentials. Its Kafka producer publishes only payment instruction state facts; the governed AsyncAPI contract is maintained in the organization `.github` repository.
 
 Payment rail integrations must remain behind outbound ports and adapters when that work is approved and tracked. Do not add provider credentials or payment data to this repository.
 
@@ -24,7 +25,7 @@ The application exposes an internal HTTP adapter over the transport-neutral paym
 
 The application boundary also normalizes the idempotency key, amount, currency, and description before comparing retries. An equivalent retry returns the original instruction identity, while reuse of the same idempotency key with a different business request is rejected. Correlation IDs are retained for tracing and are deliberately excluded from the idempotency comparison, so a retried request may have a new trace context.
 
-Payment instructions are stored in PostgreSQL through a Flyway-managed schema. Idempotency keys are unique in the database, so equivalent retries converge across replicas and restarts; the canonical request fields are compared before a replay is returned, and a changed payload returns `409 Conflict`. Payment-provider adapters, Kafka publication, and transaction saga orchestration are intentionally deferred to their planned stories.
+Payment instructions are stored in PostgreSQL through a Flyway-managed schema. Idempotency keys are unique in the database, so equivalent retries converge across replicas and restarts; the canonical request fields are compared before a replay is returned, and a changed payload returns `409 Conflict`. Creation and real terminal transitions insert one durable outbox record in the same database transaction. The publisher sends the stored payload and governed headers with a bounded leased retry loop, preserving event identity across retries. Payment-provider adapters and transaction saga orchestration remain out of scope.
 
 All payment instruction endpoints require a bearer JWT with the `payment.internal` scope. Missing or invalid authentication returns `401 Unauthorized`; an authenticated caller without that scope returns `403 Forbidden`. Both responses use `application/problem+json`. Health, service metadata, and the generated OpenAPI document remain public.
 
@@ -54,6 +55,13 @@ Config Server supplies the effective runtime configuration. The service reposito
 | `spring.security.oauth2.resourceserver.jwt.jwk-set-uri` | JWT JWK set URI | Optional when issuer discovery is available |
 | `auth.jwt.secret` | Base64 HMAC secret shared with Auth Service in SIT | none |
 | `auth.jwt.issuer` | HMAC token issuer used in SIT | none |
+| `PAYMENT_EVENTS_TOPIC` | Kafka topic for payment instruction state events | `payment.instruction.state.v1` |
+| `PAYMENT_EVENTS_BATCH_SIZE` | Maximum events claimed per publisher poll | `25` |
+| `PAYMENT_EVENTS_MAX_ATTEMPTS` | Maximum broker failure attempts before durable publication failure | `5` |
+| `PAYMENT_EVENTS_RETRY_BACKOFF` | Delay before retrying a failed publication | `PT5S` |
+| `PAYMENT_EVENTS_LEASE` | Claim lease for an in-flight publication batch | `PT30S` |
+| `PAYMENT_EVENTS_SEND_TIMEOUT` | Maximum wait for one Kafka send | `PT5S` |
+| `PAYMENT_EVENTS_POLL_DELAY_MS` | Publisher poll delay in milliseconds | `1000` |
 
 The application fallback port is `8085`, and the Helm chart sets `SERVER_PORT` from `service.port` so the process, probes, and Service remain aligned even before a service-specific Config Repo entry is added. The SIT chart injects the `payment_service` JDBC URL and reads PostgreSQL credentials from the existing `postgres` Secret (`POSTGRES_USER` and `POSTGRES_PASSWORD`). Credentials remain outside Git.
 

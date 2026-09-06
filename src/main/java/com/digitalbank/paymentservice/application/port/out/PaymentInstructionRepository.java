@@ -13,5 +13,6 @@ public interface PaymentInstructionRepository {
 
     PaymentInstruction save(PaymentInstruction instruction);
 
-    PaymentInstruction transition(PaymentInstructionId instructionId, UnaryOperator<PaymentInstruction> transition);
+    PaymentInstructionTransitionResult transition(
+            PaymentInstructionId instructionId, UnaryOperator<PaymentInstruction> transition);
 }
