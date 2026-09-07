@@ -78,7 +78,8 @@ class PostgresPaymentInstructionOutbox implements PaymentInstructionOutbox {
                      limit ?
                 )
                 update payment_instruction_outbox outbox
-                   set claim_id = ?, claim_until = ?
+                   set attempt_count = attempt_count + 1,
+                       claim_id = ?, claim_until = ?
                   from candidates
                  where outbox.event_id = candidates.event_id
                 returning
@@ -97,7 +98,6 @@ class PostgresPaymentInstructionOutbox implements PaymentInstructionOutbox {
         jdbcTemplate.update("""
                 update payment_instruction_outbox
                    set publication_status = 'PUBLISHED',
-                       attempt_count = attempt_count + 1,
                        published_at = ?,
                        claim_id = null,
                        claim_until = null
