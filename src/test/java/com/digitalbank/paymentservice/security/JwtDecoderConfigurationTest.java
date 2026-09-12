@@ -25,7 +25,9 @@ class JwtDecoderConfigurationTest {
         contextRunner
                 .withPropertyValues(
                         "auth.jwt.secret=YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
-                        "auth.jwt.issuer=digital-bank-auth")
+                        "auth.jwt.issuer=digital-bank-auth",
+                        "auth.jwt.audience=payment-service",
+                        "auth.jwt.token-purpose=user-access")
                 .run(context -> assertThat(context).hasSingleBean(JwtDecoder.class));
     }
 }
